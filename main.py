@@ -6,14 +6,30 @@
   python main.py --strategy rsi   # RSI 전략
   python main.py --simul false    # 실거래 모드 (주의!)
 """
+import os
 import sys
 import argparse
+
+# Qt 플랫폼 플러그인 경로 보정
+# (시스템에 Anaconda 등 다른 Qt가 PATH에 있으면 자동 탐지가 실패하므로,
+#  venv 내 PyQt5 플러그인 경로를 명시적으로 지정한다. 이미 설정돼 있으면 존중.)
+if "QT_QPA_PLATFORM_PLUGIN_PATH" not in os.environ:
+    import PyQt5
+    _plugins = os.path.join(
+        os.path.dirname(PyQt5.__file__), "Qt5", "plugins", "platforms"
+    )
+    if os.path.isdir(_plugins):
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _plugins
+
 import schedule
 import time
 
 from PyQt5.QtWidgets import QApplication
 
-from config.settings import IS_SIMUL, ACCOUNT_NUMBER
+from config.settings import (
+    IS_SIMUL, ACCOUNT_NUMBER, STRATEGY, WATCH_LIST, CHECK_INTERVAL_MIN,
+    MA_SHORT, MA_LONG, RSI_PERIOD, RSI_OVERSOLD, RSI_OVERBOUGHT,
+)
 from core.kiwoom import KiwoomAPI
 from core.market_data import MarketDataAPI
 from core.trader import Trader
@@ -23,24 +39,13 @@ from utils.logger import get_logger
 
 logger = get_logger("main")
 
-# -----------------------------------------------------------------------
-# 감시 종목 리스트 (관심 종목 직접 입력)
-# -----------------------------------------------------------------------
-WATCH_LIST = [
-    {"code": "005930", "name": "삼성전자"},
-    {"code": "000660", "name": "SK하이닉스"},
-    {"code": "035420", "name": "NAVER"},
-    {"code": "051910", "name": "LG화학"},
-    {"code": "006400", "name": "삼성SDI"},
-    {"code": "035720", "name": "카카오"},
-    {"code": "207940", "name": "삼성바이오로직스"},
-    {"code": "005490", "name": "POSCO홀딩스"},
-]
+# 감시 종목 / 전략 / 주기 등 모든 설정은 config/config.json 에서 읽는다.
+# (GUI: settings_gui.py 로 편집)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="키움증권 자동매매")
-    parser.add_argument("--strategy", choices=["ma", "rsi"], default="ma")
+    parser.add_argument("--strategy", choices=["ma", "rsi"], default=STRATEGY)
     parser.add_argument("--simul", choices=["true", "false"], default=str(IS_SIMUL).lower())
     return parser.parse_args()
 
@@ -64,11 +69,24 @@ def main():
     # 2) 계좌 확인
     accounts = kiwoom.get_account_list()
     logger.info(f"보유 계좌: {accounts}")
+
+    # 접속 서버 진단 (GetServerGubun: "1"=모의투자, 그 외=실거래 실서버)
+    server_gubun = kiwoom.get_login_info("GetServerGubun")
+    server_str = "모의투자" if server_gubun == "1" else "실거래(실서버)"
+    user_name = kiwoom.get_login_info("USER_NAME")
+    logger.info(f"접속 서버: {server_str} (GetServerGubun={server_gubun!r}), 사용자: {user_name}")
+    if is_simul and server_gubun != "1":
+        logger.warning("주의: .env는 모의투자(KIWOOM_SIMUL=True)인데 실서버에 접속됨! "
+                       "로그인 창에서 '모의투자 접속'을 체크했는지 확인하세요.")
+
     account = ACCOUNT_NUMBER if ACCOUNT_NUMBER else accounts[0]
     logger.info(f"사용 계좌: {account}")
 
-    # 3) 전략 선택
-    strategy = MAStrategy(short_period=5, long_period=20) if args.strategy == "ma" else RSIStrategy()
+    # 3) 전략 선택 (파라미터는 config.json 값 사용)
+    if args.strategy == "ma":
+        strategy = MAStrategy(short_period=MA_SHORT, long_period=MA_LONG)
+    else:
+        strategy = RSIStrategy(period=RSI_PERIOD, oversold=RSI_OVERSOLD, overbought=RSI_OVERBOUGHT)
 
     # 4) 모듈 초기화
     mdata = MarketDataAPI(kiwoom)
@@ -81,12 +99,12 @@ def main():
                 f"주문가능: {summary['available']:,}원")
 
     # 6) 스케줄러 설정
-    # 5분마다 전략 실행
-    schedule.every(5).minutes.do(trader.run_strategy, watch_list=WATCH_LIST)
+    # 설정한 주기마다 전략 실행
+    schedule.every(CHECK_INTERVAL_MIN).minutes.do(trader.run_strategy, watch_list=WATCH_LIST)
     # 매일 장 종료 후 잔고 저장
     schedule.every().day.at("15:40").do(_save_daily_summary, trader, mdata, account, is_simul)
 
-    logger.info("자동매매 스케줄러 시작 (5분 간격)")
+    logger.info(f"자동매매 스케줄러 시작 ({CHECK_INTERVAL_MIN}분 간격)")
     logger.info(f"감시 종목: {[w['name'] for w in WATCH_LIST]}")
 
     # 즉시 첫 실행

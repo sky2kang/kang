@@ -1,28 +1,103 @@
 """
-키움증권 API 설정 파일
+키움증권 자동매매 설정.
+
+모든 사용자 설정은 config/config.json 한 곳에 저장된다.
+(GUI: settings_gui.py 로 편집)
+
+기존 코드 호환을 위해 모듈 레벨 상수 이름(ACCOUNT_NUMBER 등)은 그대로 유지한다.
+최초 실행 시 config.json 이 없으면 .env 값 + 기본값으로 자동 생성한다.
 """
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 계좌 설정
-ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT", "")  # 계좌번호 (환경변수로 관리)
-IS_SIMUL = os.getenv("KIWOOM_SIMUL", "True") == "True"  # True: 모의투자, False: 실거래
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
-# 매매 설정
-MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "1000000"))   # 1회 최대 매수금액 (원)
-MAX_STOCK_COUNT = int(os.getenv("MAX_STOCK_COUNT", "5"))        # 최대 보유 종목수
-STOP_LOSS_RATE = float(os.getenv("STOP_LOSS_RATE", "-0.05"))   # 손절 기준 (-5%)
-TAKE_PROFIT_RATE = float(os.getenv("TAKE_PROFIT_RATE", "0.10")) # 익절 기준 (+10%)
+# 기본 설정 (config.json 최초 생성 시 사용. .env 값이 있으면 우선 시드)
+DEFAULT_CONFIG = {
+    "account": os.getenv("KIWOOM_ACCOUNT", ""),
+    "is_simul": os.getenv("KIWOOM_SIMUL", "True") == "True",
+    "max_buy_amount": int(os.getenv("MAX_BUY_AMOUNT", "1000000")),
+    "max_stock_count": int(os.getenv("MAX_STOCK_COUNT", "5")),
+    "stop_loss_rate": float(os.getenv("STOP_LOSS_RATE", "-0.05")),
+    "take_profit_rate": float(os.getenv("TAKE_PROFIT_RATE", "0.10")),
+    "trade_start_time": "09:05",
+    "trade_end_time": "15:20",
+    "strategy": "ma",            # "ma" 또는 "rsi"
+    "ma_short": 5,
+    "ma_long": 20,
+    "rsi_period": 14,
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "check_interval_min": 5,     # 전략 점검 주기(분)
+    "log_level": os.getenv("LOG_LEVEL", "INFO"),
+    # 조건검색 자동매매 규칙 (키: 조건식 index 문자열)
+    # {"0": {"name": "...", "enabled": true, "buy_on_entry": true,
+    #        "sell_on_exit": true, "buy_amount": 1000000,
+    #        "stop_loss": -5.0, "take_profit": 10.0}}
+    "condition_rules": {},
+    "watch_list": [
+        {"code": "005930", "name": "삼성전자"},
+        {"code": "000660", "name": "SK하이닉스"},
+        {"code": "035420", "name": "NAVER"},
+        {"code": "051910", "name": "LG화학"},
+        {"code": "006400", "name": "삼성SDI"},
+        {"code": "035720", "name": "카카오"},
+        {"code": "207940", "name": "삼성바이오로직스"},
+        {"code": "005490", "name": "POSCO홀딩스"},
+    ],
+}
 
-# 전략 설정
-TRADE_START_TIME = "09:05"   # 매매 시작 시각 (장 시작 후 5분)
-TRADE_END_TIME = "15:20"     # 매매 종료 시각 (장 마감 10분 전)
 
-# 로그 설정
-LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+def load_config():
+    """config.json 을 읽어 기본값과 병합한 dict 반환."""
+    cfg = dict(DEFAULT_CONFIG)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg.update(json.load(f))
+        except Exception:
+            pass
+    return cfg
 
-# DB 설정
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "trades.db")
+
+def save_config(cfg):
+    """설정 dict 를 config.json 에 저장."""
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+# config.json 이 없으면 기본값으로 생성 (최초 1회)
+if not os.path.exists(CONFIG_PATH):
+    save_config(DEFAULT_CONFIG)
+
+_cfg = load_config()
+
+# ---- 기존 코드 호환 상수 (이름 유지) ----
+ACCOUNT_NUMBER = _cfg["account"]
+IS_SIMUL = _cfg["is_simul"]
+MAX_BUY_AMOUNT = _cfg["max_buy_amount"]
+MAX_STOCK_COUNT = _cfg["max_stock_count"]
+STOP_LOSS_RATE = _cfg["stop_loss_rate"]
+TAKE_PROFIT_RATE = _cfg["take_profit_rate"]
+TRADE_START_TIME = _cfg["trade_start_time"]
+TRADE_END_TIME = _cfg["trade_end_time"]
+LOG_LEVEL = _cfg["log_level"]
+
+# ---- 추가 노출 (main.py 에서 사용) ----
+STRATEGY = _cfg["strategy"]
+MA_SHORT = _cfg["ma_short"]
+MA_LONG = _cfg["ma_long"]
+RSI_PERIOD = _cfg["rsi_period"]
+RSI_OVERSOLD = _cfg["rsi_oversold"]
+RSI_OVERBOUGHT = _cfg["rsi_overbought"]
+CHECK_INTERVAL_MIN = _cfg["check_interval_min"]
+WATCH_LIST = _cfg["watch_list"]
+CONDITION_RULES = _cfg.get("condition_rules", {})
+
+# ---- 경로 ----
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+DB_PATH = os.path.join(BASE_DIR, "data", "trades.db")

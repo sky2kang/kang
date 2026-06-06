@@ -54,8 +54,8 @@ class Trader:
     # -------------------------------------------------------------------------
     # 매수
     # -------------------------------------------------------------------------
-    def buy(self, code, name, current_price):
-        """시장가 매수 주문"""
+    def buy(self, code, name, current_price, amount=None):
+        """시장가 매수 주문. amount: 매수금액(원), None이면 전역 MAX_BUY_AMOUNT 사용"""
         if not self._is_trade_time():
             logger.warning("매매 가능 시간이 아닙니다.")
             return False
@@ -68,7 +68,8 @@ class Trader:
             logger.info(f"[{code}] 이미 보유 중")
             return False
 
-        qty = MAX_BUY_AMOUNT // current_price
+        budget = amount if amount else MAX_BUY_AMOUNT
+        qty = budget // current_price
         if qty < 1:
             logger.warning(f"[{code}] 매수 가능 수량 부족 (price={current_price:,})")
             return False

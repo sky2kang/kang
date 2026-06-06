@@ -58,9 +58,17 @@ class MarketDataAPI:
         rows = []
         prev_next = 0
 
-        while True:
-            self.api.comm_rq_data("주식일봉차트조회", "opt10081", prev_next, "1001")
+        # 최대 20페이지 안전장치 + TR 요청 실패 시 즉시 중단 (무한루프/과부하 방지)
+        for _page in range(20):
+            ret = self.api.comm_rq_data("주식일봉차트조회", "opt10081", int(prev_next), "1001")
+            if ret != 0:
+                logger.warning(f"[{code}] 일봉 TR 요청 실패(ret={ret}) - 과부하/타임아웃 가능. "
+                               f"잠시 후 재시도하세요.")
+                break
             cnt = self.api.get_repeat_cnt("opt10081", "주식일봉차트조회")
+            if cnt == 0:
+                logger.warning(f"[{code}] 일봉 데이터 0건 수신 (거래정지/신규상장 또는 잘못된 종목코드)")
+                break
 
             for i in range(cnt):
                 date = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "일자")
@@ -82,6 +90,9 @@ class MarketDataAPI:
             prev_next = self.api.tr_data.get("prev_next", "0")
             if prev_next != "2" or (rows and rows[-1]["date"] <= start_date):
                 break
+
+        if not rows:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
 
         df = pd.DataFrame(rows)
         df = df[df["date"] >= start_date].reset_index(drop=True)
@@ -114,13 +125,17 @@ class MarketDataAPI:
     # -------------------------------------------------------------------------
     # 계좌 잔고 조회 (opw00018)
     # -------------------------------------------------------------------------
-    def get_account_balance(self, account, password="0000", is_simul=True):
+    def get_account_balance(self, account, is_simul=True):
         """
         계좌 잔고 조회
         반환: {summary: dict, holdings: DataFrame}
+
+        주의: 계좌 비밀번호는 SetInputValue로 전달해도 무시됩니다.
+        키움 OpenAPI 트레이 아이콘 > '계좌비밀번호 저장'에서 AUTO 등록 필요.
+        (미등록 시 조회 시 에러 코드 44 발생)
         """
         self.api.set_input_value("계좌번호", account)
-        self.api.set_input_value("비밀번호", password)
+        self.api.set_input_value("비밀번호", "")            # AOD에 등록된 비밀번호 사용
         self.api.set_input_value("비밀번호입력매체구분", "00")
         self.api.set_input_value("조회구분", "2")
         self.api.comm_rq_data("계좌잔고조회", "opw00018", 0, "2000")

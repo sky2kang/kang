@@ -6,21 +6,49 @@
 import sys
 import time
 from PyQt5.QAxContainer import QAxWidget
-from PyQt5.QtCore import QEventLoop
+from PyQt5.QtCore import QEventLoop, QTimer
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def _decode(s):
+    """키움 OCX가 CP949 바이트를 와이드 문자열에 그대로 담아 반환해 한글이
+    깨지는 경우를 복원한다. 이미 정상인(또는 ASCII) 문자열은 그대로 둔다."""
+    if not s:
+        return s
+    try:
+        return s.encode("latin-1").decode("cp949")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 class KiwoomAPI(QAxWidget):
+    # 키움 OpenAPI는 초당 약 5회로 TR 요청을 제한한다. 요청 사이에 최소 간격을
+    # 둬 -308(요청제한/과부하) 에러와 그로 인한 빈 응답을 방지한다.
+    TR_REQUEST_INTERVAL = 0.3  # 초
+    TR_TIMEOUT_MS = 10000      # TR 응답 대기 최대 시간 (ms). 초과 시 빈 응답 처리
+
+    @staticmethod
+    def decode_text(s):
+        """OCX 반환 문자열의 한글 깨짐 복원 (표시용)."""
+        return _decode(s)
     def __init__(self):
         super().__init__()
         self._login_event = QEventLoop()
         self._tr_event = QEventLoop()
         self._order_event = QEventLoop()
+        self._condition_event = QEventLoop()
 
         self.tr_data = {}          # TR 수신 데이터 임시 저장
         self.real_data_callbacks = {}  # 실시간 데이터 콜백 {화면번호: callback}
+        self._last_tr_time = 0.0   # 마지막 TR 요청 시각 (속도 제한용)
+
+        # 조건검색
+        self.condition_list = []           # [(index, name), ...]
+        self._condition_tr_result = []     # 단발성 조건검색 결과 코드 리스트
+        self.condition_real_callback = None  # 실시간 조건검색 편입/이탈 콜백
+        self.chejan_callback = None        # 체결/잔고 이벤트 콜백
 
         self._init_api()
 
@@ -37,7 +65,101 @@ class KiwoomAPI(QAxWidget):
         self.OnReceiveChejanData.connect(self._on_receive_chejan_data)
         self.OnReceiveMsg.connect(self._on_receive_msg)
 
+        # 조건검색 이벤트
+        self.OnReceiveConditionVer.connect(self._on_receive_condition_ver)
+        self.OnReceiveTrCondition.connect(self._on_receive_tr_condition)
+        self.OnReceiveRealCondition.connect(self._on_receive_real_condition)
+
         logger.info("KiwoomAPI 초기화 완료")
+
+    # -------------------------------------------------------------------------
+    # 종목 정보 (마스터)
+    # -------------------------------------------------------------------------
+    def get_master_code_name(self, code):
+        """종목코드 → 종목명"""
+        return _decode(self.dynamicCall("GetMasterCodeName(QString)", code).strip())
+
+    def get_code_list_by_market(self, market="0"):
+        """시장별 종목코드 리스트 (0:코스피, 10:코스닥)"""
+        raw = self.dynamicCall("GetCodeListByMarket(QString)", market)
+        return [c for c in raw.split(";") if c]
+
+    # -------------------------------------------------------------------------
+    # 조건검색 (영웅문에서 저장한 조건식 사용)
+    # -------------------------------------------------------------------------
+    def get_condition_load(self, timeout_ms=5000):
+        """서버에서 조건식 목록을 불러온다 (완료 시 _on_receive_condition_ver)."""
+        ret = self.dynamicCall("GetConditionLoad()")
+        if ret != 1:
+            logger.error("GetConditionLoad 호출 실패")
+            return []
+        self._condition_event.exec_()
+        return self.condition_list
+
+    def _on_receive_condition_ver(self, ret, msg):
+        """조건식 목록 수신 완료"""
+        if ret == 1:
+            raw = self.dynamicCall("GetConditionNameList()")
+            items = []
+            for pair in [p for p in raw.split(";") if p]:
+                idx, name = pair.split("^")
+                items.append((int(idx), name))
+            self.condition_list = items
+            logger.info(f"조건식 {len(items)}개 로드됨")
+        else:
+            logger.error(f"조건식 목록 수신 실패: {msg}")
+        if self._condition_event.isRunning():
+            self._condition_event.quit()
+
+    def send_condition(self, screen_no, cond_name, cond_index, search_type=0):
+        """
+        조건검색 실행.
+        search_type: 0=단발조회, 1=실시간조회(편입/이탈 이벤트 수신)
+        반환: 성공 시 코드 리스트(단발은 결과, 실시간은 초기 편입 종목),
+              실패(SendCondition 거부) 시 None.
+        """
+        self._condition_tr_result = []
+        ret = self.dynamicCall(
+            "SendCondition(QString, QString, int, int)",
+            screen_no, cond_name, cond_index, search_type,
+        )
+        if ret != 1:
+            # 일시적 과부하/타이밍 실패 대비 1회 재시도
+            time.sleep(0.6)
+            ret = self.dynamicCall(
+                "SendCondition(QString, QString, int, int)",
+                screen_no, cond_name, cond_index, search_type,
+            )
+        if ret != 1:
+            logger.error(
+                f"SendCondition 실패: {_decode(cond_name)} (화면={screen_no}). "
+                f"상한가/체결기반 조건식은 단발 조회 미지원(실시간·장중 전용)일 수 있고, "
+                f"화면번호 중복 / 실시간 동시등록 초과(최대 약 10개) / 과부하도 원인입니다."
+            )
+            return None
+        if search_type == 0:
+            self._condition_event.exec_()
+        return list(self._condition_tr_result)
+
+    def send_condition_stop(self, screen_no, cond_name, cond_index):
+        """실시간 조건검색 중지"""
+        self.dynamicCall(
+            "SendConditionStop(QString, QString, int)",
+            screen_no, cond_name, cond_index,
+        )
+
+    def _on_receive_tr_condition(self, screen_no, code_list, cond_name, cond_index, prev_next):
+        """조건검색 단발 결과 수신"""
+        codes = [c for c in code_list.split(";") if c]
+        self._condition_tr_result = codes
+        logger.info(f"조건검색 '{_decode(cond_name)}' 결과: {len(codes)}종목")
+        if self._condition_event.isRunning():
+            self._condition_event.quit()
+
+    def _on_receive_real_condition(self, code, event_type, cond_name, cond_index):
+        """실시간 조건검색: event_type 'I'=편입, 'D'=이탈"""
+        if self.condition_real_callback:
+            self.condition_real_callback(code, event_type, cond_name, cond_index)
 
     # -------------------------------------------------------------------------
     # 로그인
@@ -73,7 +195,7 @@ class KiwoomAPI(QAxWidget):
 
     def get_login_info(self, tag):
         """로그인 정보 조회 (USER_ID, USER_NAME, ACCNO, GetServerGubun 등)"""
-        return self.dynamicCall("GetLoginInfo(QString)", tag)
+        return _decode(self.dynamicCall("GetLoginInfo(QString)", tag))
 
     # -------------------------------------------------------------------------
     # TR 조회 (요청/응답)
@@ -82,16 +204,43 @@ class KiwoomAPI(QAxWidget):
         self.dynamicCall("SetInputValue(QString, QString)", key, str(value))
 
     def comm_rq_data(self, rq_name, tr_code, prev_next, screen_no):
-        """TR 요청 전송 후 응답 대기"""
+        """TR 요청 전송 후 응답 대기.
+        요청 간 최소 간격을 강제해 과부하(-308)를 막고, 응답이 오지 않으면
+        TR_TIMEOUT_MS 후 빈 응답으로 처리해 무한 대기를 막는다."""
+        # 직전 요청과의 간격이 부족하면 대기
+        elapsed = time.time() - self._last_tr_time
+        if elapsed < self.TR_REQUEST_INTERVAL:
+            time.sleep(self.TR_REQUEST_INTERVAL - elapsed)
+
         ret = self.dynamicCall(
             "CommRqData(QString, QString, int, QString)",
             rq_name, tr_code, prev_next, screen_no
         )
+        self._last_tr_time = time.time()
         if ret != 0:
-            logger.error(f"TR 요청 실패: {rq_name}, ret={ret}")
+            logger.error(f"TR 요청 실패: {rq_name}({tr_code}), ret={ret} "
+                         f"(-308=요청제한/과부하, 0이 아니면 미수신)")
             return ret
+
+        # 응답 타임아웃: 일정 시간 내 OnReceiveTrData가 없으면 루프 종료
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._on_tr_timeout)
+        timer.start(self.TR_TIMEOUT_MS)
+        self.tr_data["timeout"] = False
         self._tr_event.exec_()
+        timer.stop()
+
+        if self.tr_data.get("timeout"):
+            logger.error(f"TR 응답 타임아웃: {rq_name}({tr_code})")
+            return -1
         return 0
+
+    def _on_tr_timeout(self):
+        """TR 응답 대기 타임아웃 처리"""
+        self.tr_data["timeout"] = True
+        if self._tr_event.isRunning():
+            self._tr_event.quit()
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
                              prev_next, *args):
@@ -103,10 +252,10 @@ class KiwoomAPI(QAxWidget):
 
     def get_comm_data(self, tr_code, record_name, index, item_name):
         """TR 단건 데이터 조회"""
-        return self.dynamicCall(
+        return _decode(self.dynamicCall(
             "GetCommData(QString, QString, int, QString)",
             tr_code, record_name, index, item_name
-        ).strip()
+        ).strip())
 
     def get_repeat_cnt(self, tr_code, record_name):
         """TR 반복 데이터 개수 조회"""
@@ -171,10 +320,15 @@ class KiwoomAPI(QAxWidget):
             price = self.get_chejan_data(910)
             logger.info(f"[체결] 주문번호={order_no}, 종목={code}, "
                         f"상태={status}, 수량={qty}, 가격={price}")
+            if self.chejan_callback:
+                self.chejan_callback({
+                    "order_no": order_no, "code": code, "status": status,
+                    "qty": qty, "price": price,
+                })
 
     def get_chejan_data(self, fid):
         """체결 잔고 데이터 조회"""
         return self.dynamicCall("GetChejanData(int)", fid).strip()
 
     def _on_receive_msg(self, screen_no, rq_name, tr_code, msg):
-        logger.info(f"[서버메시지] {rq_name}: {msg}")
+        logger.info(f"[서버메시지] {_decode(rq_name)}: {_decode(msg)}")
