@@ -42,7 +42,8 @@ class TradeDB:
         self.conn.execute(
             "INSERT INTO orders (timestamp, code, name, side, qty, price, is_simul, reason) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.datetime.now().isoformat(), code, name, side, qty, price, int(is_simul), reason)
+            (datetime.datetime.now().isoformat(), code, name, side,
+             qty, price, int(is_simul), reason)
         )
         self.conn.commit()
 

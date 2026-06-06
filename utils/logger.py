@@ -14,7 +14,9 @@ def get_logger(name):
     level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
     logger.setLevel(level)
 
-    fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(name)s - %(message)s", "%Y-%m-%d %H:%M:%S")
+    fmt = logging.Formatter(
+        "[%(asctime)s] %(levelname)s %(name)s - %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
 
     # 콘솔 출력
     ch = logging.StreamHandler()
