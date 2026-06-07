@@ -7,3 +7,7 @@ python-dotenv==1.0.0
 schedule==1.2.1
 SQLAlchemy==2.0.20
 pyqtgraph==0.13.7
+# matplotlib 은 백테스트 차트(backtest/chart.py) 전용 선택 의존성입니다.
+# 32비트 키움 환경에는 휠이 없어 설치가 실패할 수 있어 기본 비활성화합니다.
+# 백테스트 PNG 차트가 필요하면 별도로 설치하세요: pip install matplotlib
+# matplotlib==3.7.2

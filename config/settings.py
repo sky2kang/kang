@@ -98,6 +98,22 @@ CHECK_INTERVAL_MIN = _cfg["check_interval_min"]
 WATCH_LIST = _cfg["watch_list"]
 CONDITION_RULES = _cfg.get("condition_rules", {})
 
+# ---- 조건검색 모드 전용 설정 (미지정 시 위 기본값을 그대로 사용) ----
+COND_MAX_BUY_AMOUNT = int(os.getenv("COND_MAX_BUY_AMOUNT", str(MAX_BUY_AMOUNT)))
+COND_MAX_STOCK_COUNT = int(os.getenv("COND_MAX_STOCK_COUNT", str(MAX_STOCK_COUNT)))
+COND_STOP_LOSS_RATE = float(os.getenv("COND_STOP_LOSS_RATE", str(STOP_LOSS_RATE)))
+COND_TAKE_PROFIT_RATE = float(os.getenv("COND_TAKE_PROFIT_RATE", str(TAKE_PROFIT_RATE)))
+
+# ---- 안전장치 설정 (초보자 보호) ----
+DAILY_LOSS_LIMIT_RATE = float(os.getenv("DAILY_LOSS_LIMIT_RATE", "-0.10"))  # 일일 손실 한도
+MAX_ORDERS_PER_DAY = int(os.getenv("MAX_ORDERS_PER_DAY", "20"))             # 일일 주문 한도
+MIN_AVAILABLE_CASH = int(os.getenv("MIN_AVAILABLE_CASH", "10000"))          # 최소 주문가능액
+
+# ---- 알림 설정 (둘 다 비워두면 알림 비활성화) ----
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 # ---- 경로 ----
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 DB_PATH = os.path.join(BASE_DIR, "data", "trades.db")

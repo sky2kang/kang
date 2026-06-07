@@ -3,7 +3,6 @@
 - Windows 환경에서만 동작 (OCX 컨트롤)
 - PyQt5 이벤트 루프 기반
 """
-import sys
 import time
 from PyQt5.QAxContainer import QAxWidget
 from PyQt5.QtCore import QEventLoop, QTimer
@@ -243,7 +242,7 @@ class KiwoomAPI(QAxWidget):
             self._tr_event.quit()
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
-                             prev_next, *args):
+                            prev_next, *args):
         logger.debug(f"TR 수신: {rq_name} ({tr_code}), 다음페이지={prev_next}")
         self.tr_data["prev_next"] = prev_next
         self.tr_data["rq_name"] = rq_name
@@ -332,3 +331,23 @@ class KiwoomAPI(QAxWidget):
 
     def _on_receive_msg(self, screen_no, rq_name, tr_code, msg):
         logger.info(f"[서버메시지] {_decode(rq_name)}: {_decode(msg)}")
+
+    # -------------------------------------------------------------------------
+    # 조건검색 호환 API (core/condition_trader.py·screener.py 용 얇은 래퍼)
+    # 정본 구현은 위 get_condition_load / send_condition / _on_receive_* 이며,
+    # condition_list 는 [(index, name), ...] 형식이다.
+    # -------------------------------------------------------------------------
+    def load_condition_list(self):
+        """조건식 목록을 불러온다 (get_condition_load 별칭). [(idx, name), ...] 반환."""
+        return self.get_condition_load()
+
+    def get_condition_index_by_name(self, name):
+        """조건명으로 인덱스 조회 (없으면 None)."""
+        for idx, cond_name in self.condition_list:
+            if cond_name == name:
+                return idx
+        return None
+
+    def register_real_condition_callback(self, callback):
+        """실시간 조건 편입/이탈 콜백 등록 (condition_real_callback 설정)."""
+        self.condition_real_callback = callback

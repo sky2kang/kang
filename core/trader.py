@@ -16,13 +16,32 @@ SCREEN_BALANCE = "3001"
 
 
 class Trader:
-    def __init__(self, kiwoom, account, market_data_api, strategy, is_simul=True):
+    def __init__(self, kiwoom, account, market_data_api, strategy, is_simul=True,
+                 max_buy_amount=None, max_stock_count=None,
+                 stop_loss_rate=None, take_profit_rate=None, notifier=None,
+                 safety_guard=None):
+        """
+        리스크 설정은 인자로 주입 가능하며, 미지정 시 config 기본값을 사용한다.
+        이를 통해 지표 전략 모드와 조건검색 모드가 서로 다른 한도를 가질 수 있다.
+        notifier: utils.notifier.Notifier 인스턴스 (매매 시 알림 전송, 선택)
+        safety_guard: core.safety_guard.SafetyGuard 인스턴스 (안전장치, 선택)
+        """
         self.api = kiwoom
         self.account = account
         self.mdata = market_data_api
         self.strategy = strategy
         self.is_simul = is_simul
         self.db = TradeDB()
+        self.notifier = notifier
+        self.guard = safety_guard
+
+        # 리스크/한도 설정 (인스턴스별)
+        self.max_buy_amount = max_buy_amount if max_buy_amount is not None else MAX_BUY_AMOUNT
+        self.max_stock_count = max_stock_count if max_stock_count is not None else MAX_STOCK_COUNT
+        self.stop_loss_rate = stop_loss_rate if stop_loss_rate is not None else STOP_LOSS_RATE
+        self.take_profit_rate = (
+            take_profit_rate if take_profit_rate is not None else TAKE_PROFIT_RATE
+        )
 
         # 포지션 캐시 {code: {qty, avg_price, name}}
         self.positions = {}
@@ -55,20 +74,28 @@ class Trader:
     # 매수
     # -------------------------------------------------------------------------
     def buy(self, code, name, current_price, amount=None):
-        """시장가 매수 주문. amount: 매수금액(원), None이면 전역 MAX_BUY_AMOUNT 사용"""
+        """시장가 매수 주문. amount: 매수금액(원), None이면 인스턴스 max_buy_amount 사용"""
+        # 안전장치 검사 (일일손실한도/주문횟수/장시간/잔고)
+        if self.guard:
+            available = amount if amount else self.max_buy_amount  # 보수적 추정치
+            ok, reason = self.guard.check_buy(available)
+            if not ok:
+                logger.warning(f"[안전장치] 매수 차단: {reason}")
+                return False
+
         if not self._is_trade_time():
             logger.warning("매매 가능 시간이 아닙니다.")
             return False
 
-        if len(self.positions) >= MAX_STOCK_COUNT:
-            logger.warning(f"최대 보유 종목수({MAX_STOCK_COUNT}) 초과")
+        if len(self.positions) >= self.max_stock_count:
+            logger.warning(f"최대 보유 종목수({self.max_stock_count}) 초과")
             return False
 
         if code in self.positions:
             logger.info(f"[{code}] 이미 보유 중")
             return False
 
-        budget = amount if amount else MAX_BUY_AMOUNT
+        budget = amount if amount else self.max_buy_amount
         qty = budget // current_price
         if qty < 1:
             logger.warning(f"[{code}] 매수 가능 수량 부족 (price={current_price:,})")
@@ -90,7 +117,14 @@ class Trader:
         if ret == 0:
             self.positions[code] = {"name": name, "qty": qty, "avg_price": current_price}
             self.db.save_order(code, name, "BUY", qty, current_price, self.is_simul)
+            if self.guard:
+                self.guard.record_order()
             logger.info(f"[{code}] 매수 주문 전송 성공")
+            self._notify(
+                f"🟢 매수: {name}({code})\n"
+                f"수량: {qty}주 @ 시장가 (약 {qty * current_price:,}원)\n"
+                f"모드: {'모의투자' if self.is_simul else '실거래'}"
+            )
             return True
         else:
             logger.error(f"[{code}] 매수 주문 전송 실패: ret={ret}")
@@ -125,7 +159,14 @@ class Trader:
         if ret == 0:
             self.db.save_order(code, name, "SELL", qty, 0, self.is_simul, reason)
             del self.positions[code]
+            if self.guard:
+                self.guard.record_order()
             logger.info(f"[{code}] 매도 주문 전송 성공")
+            self._notify(
+                f"🔴 매도: {name}({code})\n"
+                f"수량: {qty}주 @ 시장가\n"
+                f"사유: {reason}"
+            )
             return True
         else:
             logger.error(f"[{code}] 매도 주문 전송 실패: ret={ret}")
@@ -166,6 +207,38 @@ class Trader:
                     self.buy(code, name, info["price"])
             except Exception as e:
                 logger.error(f"[{code}] 매수 체크 오류: {e}")
+
+    # -------------------------------------------------------------------------
+    # 리스크 점검 전용 (조건검색 모드에서 손절/익절 적용)
+    # -------------------------------------------------------------------------
+    def check_risk(self):
+        """
+        보유 종목의 손절/익절 조건만 점검하여 매도.
+        조건검색 모드처럼 매수는 별도 로직이 담당할 때 사용한다.
+        """
+        if not self._is_trade_time():
+            return
+        for code, pos in list(self.positions.items()):
+            try:
+                info = self.mdata.get_stock_info(code)
+                profit_rate = (info["price"] - pos["avg_price"]) / pos["avg_price"]
+                if profit_rate <= self.stop_loss_rate:
+                    self.sell(code, reason=f"손절({profit_rate:.2%})")
+                elif profit_rate >= self.take_profit_rate:
+                    self.sell(code, reason=f"익절({profit_rate:.2%})")
+            except Exception as e:
+                logger.error(f"[{code}] 리스크 점검 오류: {e}")
+
+    # -------------------------------------------------------------------------
+    # 알림 전송 헬퍼
+    # -------------------------------------------------------------------------
+    def _notify(self, message):
+        """notifier가 설정된 경우 알림 전송 (실패해도 매매에 영향 없음)"""
+        if self.notifier:
+            try:
+                self.notifier.send(message)
+            except Exception as e:
+                logger.error(f"알림 전송 실패: {e}")
 
 
 def _days_ago(n):

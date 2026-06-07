@@ -11,6 +11,7 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # 로그 / 데이터
 logs/
@@ -19,7 +20,11 @@ data/
 *.sqlite
 *.sqlite3
 
+# 백테스트 산출물
+backtest/charts/
+
 # IDE / 로컬 설정
 .claude/settings.local.json
+.claude/worktrees/
 .vscode/
 .idea/
