@@ -3,8 +3,6 @@
 - Windows 환경에서만 동작 (OCX 컨트롤)
 - PyQt5 이벤트 루프 기반
 """
-import sys
-import time
 from PyQt5.QAxContainer import QAxWidget
 from PyQt5.QtCore import QEventLoop
 from utils.logger import get_logger
@@ -18,9 +16,15 @@ class KiwoomAPI(QAxWidget):
         self._login_event = QEventLoop()
         self._tr_event = QEventLoop()
         self._order_event = QEventLoop()
+        self._condition_event = QEventLoop()
 
         self.tr_data = {}          # TR 수신 데이터 임시 저장
         self.real_data_callbacks = {}  # 실시간 데이터 콜백 {화면번호: callback}
+
+        # 조건검색
+        self.condition_list = {}       # {조건인덱스: 조건명}
+        self.condition_tr_result = []  # 조건검색 단발성 결과 (종목코드 리스트)
+        self.real_condition_callback = None  # 실시간 조건 편입/이탈 콜백
 
         self._init_api()
 
@@ -36,6 +40,11 @@ class KiwoomAPI(QAxWidget):
         self.OnReceiveRealData.connect(self._on_receive_real_data)
         self.OnReceiveChejanData.connect(self._on_receive_chejan_data)
         self.OnReceiveMsg.connect(self._on_receive_msg)
+
+        # 조건검색 이벤트
+        self.OnReceiveConditionVer.connect(self._on_receive_condition_ver)
+        self.OnReceiveTrCondition.connect(self._on_receive_tr_condition)
+        self.OnReceiveRealCondition.connect(self._on_receive_real_condition)
 
         logger.info("KiwoomAPI 초기화 완료")
 
@@ -94,7 +103,7 @@ class KiwoomAPI(QAxWidget):
         return 0
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
-                             prev_next, *args):
+                            prev_next, *args):
         logger.debug(f"TR 수신: {rq_name} ({tr_code}), 다음페이지={prev_next}")
         self.tr_data["prev_next"] = prev_next
         self.tr_data["rq_name"] = rq_name
@@ -178,3 +187,95 @@ class KiwoomAPI(QAxWidget):
 
     def _on_receive_msg(self, screen_no, rq_name, tr_code, msg):
         logger.info(f"[서버메시지] {rq_name}: {msg}")
+
+    # -------------------------------------------------------------------------
+    # 조건검색 (HTS에서 저장한 조건식 활용)
+    # -------------------------------------------------------------------------
+    def load_condition_list(self):
+        """
+        서버에 저장된 조건검색식 목록 요청.
+        HTS(영웅문)의 [0150] 조건검색 화면에서 만들어 저장한 조건식을 불러온다.
+        완료 시 self.condition_list 에 {인덱스: 조건명} 형태로 채워진다.
+        """
+        logger.info("조건검색식 목록 요청...")
+        ret = self.dynamicCall("GetConditionLoad()")
+        if ret != 1:
+            raise RuntimeError("조건검색식 로드 요청 실패")
+        self._condition_event.exec_()  # _on_receive_condition_ver 에서 quit
+        logger.info(f"조건검색식 {len(self.condition_list)}개 로드: "
+                    f"{list(self.condition_list.values())}")
+        return self.condition_list
+
+    def _on_receive_condition_ver(self, ret, msg):
+        """조건검색식 목록 수신 완료 이벤트"""
+        if ret == 1:
+            raw = self.dynamicCall("GetConditionNameList()")
+            # 형식: "인덱스^조건명;인덱스^조건명;..."
+            for item in raw.strip(";").split(";"):
+                if not item:
+                    continue
+                idx, name = item.split("^")
+                self.condition_list[int(idx)] = name
+        else:
+            logger.error("조건검색식 목록 수신 실패")
+        self._condition_event.quit()
+
+    def get_condition_index_by_name(self, name):
+        """조건명으로 인덱스 조회"""
+        for idx, cond_name in self.condition_list.items():
+            if cond_name == name:
+                return idx
+        return None
+
+    def send_condition(self, screen_no, cond_name, cond_index, search_type=1):
+        """
+        조건검색 요청.
+        search_type: 0=단발성 조회(현재 만족 종목 1회 조회),
+                     1=실시간 조회(종목 편입/이탈을 실시간으로 통보)
+        반환: 단발성(0)일 때 종목코드 리스트
+        """
+        self.condition_tr_result = []
+        ret = self.dynamicCall(
+            "SendCondition(QString, QString, int, int)",
+            screen_no, cond_name, cond_index, search_type
+        )
+        if ret != 1:
+            logger.error(f"조건검색 요청 실패: {cond_name}")
+            return []
+
+        if search_type == 0:
+            self._condition_event.exec_()  # 단발성은 결과 수신까지 대기
+            return self.condition_tr_result
+        else:
+            logger.info(f"실시간 조건검색 시작: [{cond_name}] (idx={cond_index})")
+            return []
+
+    def send_condition_stop(self, screen_no, cond_name, cond_index):
+        """실시간 조건검색 중지"""
+        self.dynamicCall(
+            "SendConditionStop(QString, QString, int)",
+            screen_no, cond_name, cond_index
+        )
+        logger.info(f"실시간 조건검색 중지: [{cond_name}]")
+
+    def _on_receive_tr_condition(self, screen_no, code_list, cond_name,
+                                 cond_index, prev_next):
+        """조건검색 단발성 결과 수신 이벤트"""
+        codes = [c for c in code_list.strip(";").split(";") if c]
+        self.condition_tr_result = codes
+        logger.info(f"조건검색 [{cond_name}] 결과: {len(codes)}개 종목")
+        self._condition_event.quit()
+
+    def _on_receive_real_condition(self, code, event_type, cond_name, cond_index):
+        """
+        실시간 조건검색 편입/이탈 이벤트
+        event_type: "I"=편입(조건 만족), "D"=이탈(조건 불만족)
+        """
+        event_str = "편입" if event_type == "I" else "이탈"
+        logger.info(f"[실시간조건] [{cond_name}] {code} {event_str}")
+        if self.real_condition_callback:
+            self.real_condition_callback(code, event_type, cond_name, cond_index)
+
+    def register_real_condition_callback(self, callback):
+        """실시간 조건 편입/이탈 시 호출할 콜백 등록"""
+        self.real_condition_callback = callback

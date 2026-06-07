@@ -17,6 +17,7 @@ from config.settings import IS_SIMUL, ACCOUNT_NUMBER
 from core.kiwoom import KiwoomAPI
 from core.market_data import MarketDataAPI
 from core.trader import Trader
+from core.condition_trader import ConditionTrader
 from strategy.ma_strategy import MAStrategy
 from strategy.rsi_strategy import RSIStrategy
 from utils.logger import get_logger
@@ -40,7 +41,11 @@ WATCH_LIST = [
 
 def parse_args():
     parser = argparse.ArgumentParser(description="키움증권 자동매매")
+    parser.add_argument("--mode", choices=["strategy", "condition"], default="strategy",
+                        help="strategy: 지표 전략 매매, condition: HTS 조건검색식 매매")
     parser.add_argument("--strategy", choices=["ma", "rsi"], default="ma")
+    parser.add_argument("--condition", default="",
+                        help="조건검색 모드에서 사용할 HTS 조건식 이름")
     parser.add_argument("--simul", choices=["true", "false"], default=str(IS_SIMUL).lower())
     return parser.parse_args()
 
@@ -68,7 +73,10 @@ def main():
     logger.info(f"사용 계좌: {account}")
 
     # 3) 전략 선택
-    strategy = MAStrategy(short_period=5, long_period=20) if args.strategy == "ma" else RSIStrategy()
+    if args.strategy == "ma":
+        strategy = MAStrategy(short_period=5, long_period=20)
+    else:
+        strategy = RSIStrategy()
 
     # 4) 모듈 초기화
     mdata = MarketDataAPI(kiwoom)
@@ -80,17 +88,26 @@ def main():
                 f"수익률: {summary['total_profit_rate']:.2f}%, "
                 f"주문가능: {summary['available']:,}원")
 
-    # 6) 스케줄러 설정
-    # 5분마다 전략 실행
-    schedule.every(5).minutes.do(trader.run_strategy, watch_list=WATCH_LIST)
-    # 매일 장 종료 후 잔고 저장
+    # 매일 장 종료 후 잔고 저장 (공통)
     schedule.every().day.at("15:40").do(_save_daily_summary, trader, mdata, account, is_simul)
 
-    logger.info("자동매매 스케줄러 시작 (5분 간격)")
-    logger.info(f"감시 종목: {[w['name'] for w in WATCH_LIST]}")
-
-    # 즉시 첫 실행
-    trader.run_strategy(WATCH_LIST)
+    if args.mode == "condition":
+        # ----- 조건검색식 기반 실시간 매매 -----
+        if not args.condition:
+            logger.error("조건검색 모드는 --condition '조건식이름' 인자가 필요합니다.")
+            return
+        cond_trader = ConditionTrader(kiwoom, trader, mdata)
+        cond_trader.start(args.condition)
+        # 손절/익절은 3분마다 보유종목 리스크 점검으로 적용
+        schedule.every(3).minutes.do(trader.check_risk)
+        logger.info(f"조건검색 자동매매 가동: [{args.condition}] "
+                    f"(편입→매수 / 이탈→매도, 손절/익절 3분 점검)")
+    else:
+        # ----- 지표 전략 기반 매매 (5분 주기) -----
+        schedule.every(5).minutes.do(trader.run_strategy, watch_list=WATCH_LIST)
+        logger.info("자동매매 스케줄러 시작 (5분 간격)")
+        logger.info(f"감시 종목: {[w['name'] for w in WATCH_LIST]}")
+        trader.run_strategy(WATCH_LIST)  # 즉시 첫 실행
 
     # 이벤트 루프 (PyQt5 + schedule 병행)
     while True:

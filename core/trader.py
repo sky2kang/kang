@@ -166,6 +166,27 @@ class Trader:
             except Exception as e:
                 logger.error(f"[{code}] 매수 체크 오류: {e}")
 
+    # -------------------------------------------------------------------------
+    # 리스크 점검 전용 (조건검색 모드에서 손절/익절 적용)
+    # -------------------------------------------------------------------------
+    def check_risk(self):
+        """
+        보유 종목의 손절/익절 조건만 점검하여 매도.
+        조건검색 모드처럼 매수는 별도 로직이 담당할 때 사용한다.
+        """
+        if not self._is_trade_time():
+            return
+        for code, pos in list(self.positions.items()):
+            try:
+                info = self.mdata.get_stock_info(code)
+                profit_rate = (info["price"] - pos["avg_price"]) / pos["avg_price"]
+                if profit_rate <= STOP_LOSS_RATE:
+                    self.sell(code, reason=f"손절({profit_rate:.2%})")
+                elif profit_rate >= TAKE_PROFIT_RATE:
+                    self.sell(code, reason=f"익절({profit_rate:.2%})")
+            except Exception as e:
+                logger.error(f"[{code}] 리스크 점검 오류: {e}")
+
 
 def _days_ago(n):
     return (datetime.datetime.now() - datetime.timedelta(days=n)).strftime("%Y%m%d")
