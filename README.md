@@ -12,7 +12,18 @@ Python + PyQt5 기반 키움증권 자동매매 시스템입니다.
 
 ---
 
-## 설치 순서
+## 빠른 시작 (초보자용) ⭐
+
+키움 OpenAPI+ 설치 후, **딱 2개 파일만** 더블클릭하면 됩니다.
+
+1. **`setup.bat`** 더블클릭 → 패키지 설치 + 설정 마법사가 질문으로 `.env` 자동 생성
+2. **`run.bat`** 더블클릭 → 자동매매 시작 (비정상 종료 시 자동 재시작)
+
+> 처음에는 무조건 **모의투자**로 시작됩니다. 충분히 테스트한 뒤 실거래로 전환하세요.
+
+---
+
+## 설치 순서 (수동)
 
 ### 1. 키움증권 OpenAPI+ 설치
 1. [키움증권 홈페이지](https://www.kiwoom.com) → 트레이딩 → Open API+ 메뉴
@@ -24,10 +35,13 @@ Python + PyQt5 기반 키움증권 자동매매 시스템입니다.
 pip install -r requirements.txt
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (둘 중 택1)
 ```bash
-cp .env.example .env
-# .env 파일을 열어 계좌번호 등 실제 값 입력
+# 방법 A: 설정 마법사 (초보자 추천 - 질문에 답하면 자동 생성)
+python setup_wizard.py
+
+# 방법 B: 직접 편집
+cp .env.example .env   # .env 를 열어 계좌번호 등 입력
 ```
 
 ### 4. 실행
@@ -44,9 +58,50 @@ python main.py --mode condition --condition "급등주포착"
 # 여러 조건식 동시 운영 (쉼표로 구분)
 python main.py --mode condition --condition "급등주포착,눌림목공략"
 
+# GUI 대시보드 실행
+python main.py --gui
+
+# 개별 종목 상세 분석
+python main.py --analyze 005930
+
+# 전략 백테스트 (실전 투입 전 검증)
+python run_backtest.py 005930 --days 365
+
 # 실거래 모드 (주의!)
 python main.py --simul false
 ```
+
+---
+
+## 초보자 보호 기능
+
+| 기능 | 설명 |
+|------|------|
+| **설정 마법사** | `setup_wizard.py` — 질문-답변으로 `.env` 자동 생성 |
+| **모의투자 우선** | 마법사 기본값이 모의투자, 실거래 전환 시 경고 |
+| **실거래 이중확인** | GUI에서 실거래 시작 시 재확인 팝업 |
+| **일일 손실 한도** | 하루 -10%(기본) 도달 시 신규 매수 자동 중단 |
+| **일일 주문 한도** | 하루 20회(기본) 초과 시 주문 차단 (무한반복 방지) |
+| **장외 시간 차단** | 평일 09:00~15:30 외 주문 차단 |
+| **잔고 부족 경고** | 주문가능액 부족 시 매수 차단 |
+| **한글 오류 안내** | 키움 오류코드를 한글 + 해결방법으로 변환 (`utils/errors.py`) |
+| **자동 재시작** | `run.bat` 이 비정상 종료 시 자동 재실행 |
+| **로그 자동 정리** | 30일 지난 로그 자동 삭제 |
+| **시작프로그램 등록** | `install_autostart.bat` 으로 PC 부팅 시 자동 실행 |
+
+### GUI 대시보드
+`python main.py --gui` 로 실행. 코드 수정 없이 화면에서:
+- 계좌 현황 / 보유종목 / 수익률 실시간 확인
+- 손절·익절·매수금액·종목수를 입력창으로 조절
+- 매매 시작/중지 버튼, 실시간 로그, 안전장치 상태 표시
+
+### 개별 종목 상세 분석
+`python main.py --analyze 005930` — 이동평균·RSI·MACD·볼린저밴드·거래량·
+지지/저항선을 종합해 **매수/중립/매도 의견**을 점수와 함께 제시합니다.
+
+### 백테스트
+`python run_backtest.py 005930` — MA vs RSI 전략을 과거 데이터로 시뮬레이션하여
+수익률·승률·최대낙폭(MDD)을 비교하고 추천 전략을 알려줍니다.
 
 ---
 
@@ -121,26 +176,42 @@ COND_TAKE_PROFIT_RATE=0.05   # 조건검색 익절 (+5%)
 ```
 kang/
 ├── main.py                  # 메인 실행 진입점
+├── run_backtest.py          # 전략 백테스트 실행
+├── setup_wizard.py          # 설정 마법사 (.env 자동생성)
+├── setup.bat                # 초기 설치 (더블클릭)
+├── run.bat                  # 자동매매 실행 (자동 재시작)
+├── install_autostart.bat    # 시작프로그램 등록
 ├── requirements.txt
 ├── .env.example             # 환경변수 예시
 │
 ├── config/
-│   └── settings.py          # 전역 설정 (계좌, 매매 한도, 시간 등)
+│   └── settings.py          # 전역 설정 (계좌, 한도, 안전장치, 알림)
 │
 ├── core/
-│   ├── kiwoom.py            # 키움 OpenAPI+ 래퍼 클래스 (조건검색 포함)
+│   ├── kiwoom.py            # 키움 OpenAPI+ 래퍼 (조건검색 포함)
 │   ├── market_data.py       # 시세·계좌 조회 (TR 조회)
 │   ├── trader.py            # 주문 실행 + 리스크 관리
-│   └── condition_trader.py  # 조건검색식 기반 실시간 매매
+│   ├── condition_trader.py  # 조건검색식 기반 실시간 매매
+│   ├── safety_guard.py      # 안전장치 (손실한도/주문한도/장시간)
+│   └── analyzer.py          # 개별 종목 상세 기술적 분석
 │
 ├── strategy/
 │   ├── base_strategy.py     # 전략 추상 기본 클래스
 │   ├── ma_strategy.py       # 이동평균 골든/데드크로스 전략
 │   └── rsi_strategy.py      # RSI 과매수/과매도 전략
 │
+├── backtest/
+│   └── engine.py            # 백테스트 엔진 (수익률/승률/MDD)
+│
+├── gui/
+│   └── dashboard.py         # PyQt5 GUI 대시보드
+│
 ├── utils/
 │   ├── logger.py            # 로테이팅 파일 로거
 │   ├── notifier.py          # 슬랙/텔레그램 매매 알림
+│   ├── report.py            # 일일 매매 리포트
+│   ├── errors.py            # 키움 오류코드 한글 변환
+│   ├── log_cleaner.py       # 오래된 로그 자동 정리
 │   └── db.py                # SQLite 매매 기록 DB
 │
 ├── logs/                    # 실행 로그 저장

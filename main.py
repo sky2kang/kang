@@ -2,9 +2,11 @@
 키움증권 자동매매 메인 실행 파일
 
 실행 방법:
-  python main.py                  # 기본 실행 (MA 전략)
-  python main.py --strategy rsi   # RSI 전략
-  python main.py --simul false    # 실거래 모드 (주의!)
+  python main.py                       # 기본 실행 (MA 전략)
+  python main.py --strategy rsi        # RSI 전략
+  python main.py --simul false         # 실거래 모드 (주의!)
+  python main.py --mode condition --condition "급등주포착,눌림목"  # 조건검색
+  python main.py --analyze 005930      # 개별 종목 상세 분석
 """
 import sys
 import argparse
@@ -17,15 +19,20 @@ from config.settings import (
     IS_SIMUL, ACCOUNT_NUMBER,
     COND_MAX_BUY_AMOUNT, COND_MAX_STOCK_COUNT,
     COND_STOP_LOSS_RATE, COND_TAKE_PROFIT_RATE,
+    DAILY_LOSS_LIMIT_RATE, MAX_ORDERS_PER_DAY, MIN_AVAILABLE_CASH,
 )
 from core.kiwoom import KiwoomAPI
 from core.market_data import MarketDataAPI
 from core.trader import Trader
 from core.condition_trader import ConditionTrader
+from core.safety_guard import SafetyGuard
+from core.analyzer import StockAnalyzer
 from strategy.ma_strategy import MAStrategy
 from strategy.rsi_strategy import RSIStrategy
 from utils.logger import get_logger
 from utils.notifier import Notifier
+from utils.report import DailyReport
+from utils.log_cleaner import clean_old_logs
 
 logger = get_logger("main")
 
@@ -53,15 +60,48 @@ def parse_args():
                         help="조건검색 모드 조건식 이름. 여러 개는 쉼표로 구분 "
                              "(예: \"급등주포착,눌림목공략\")")
     parser.add_argument("--simul", choices=["true", "false"], default=str(IS_SIMUL).lower())
+    parser.add_argument("--analyze", default="",
+                        help="개별 종목 상세 분석 후 종료 (종목코드, 예: 005930)")
+    parser.add_argument("--gui", action="store_true",
+                        help="GUI 대시보드 실행")
     return parser.parse_args()
+
+
+def run_analyze(code):
+    """개별 종목 상세 분석 (로그인 후 분석 결과 출력하고 종료)"""
+    import datetime
+    app = QApplication(sys.argv)  # noqa: F841  (OCX 사용 위해 필요)
+    kiwoom = KiwoomAPI()
+    kiwoom.login()
+    mdata = MarketDataAPI(kiwoom)
+    start = (datetime.datetime.now() - datetime.timedelta(days=120)).strftime("%Y%m%d")
+    df = mdata.get_daily_ohlcv(code, start)
+    name = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
+    print(StockAnalyzer(df).report_text(code, name))
 
 
 def main():
     args = parse_args()
+
+    # 개별 종목 분석 모드 (분석 후 종료)
+    if args.analyze:
+        run_analyze(args.analyze)
+        return
+
+    # GUI 대시보드 모드
+    if args.gui:
+        from gui.dashboard import run_gui
+        logger.info("GUI 대시보드를 실행합니다.")
+        run_gui(controller=None)  # 데모 모드 (실거래 연동은 controller 주입)
+        return
+
     is_simul = args.simul == "true"
     mode_str = "모의투자" if is_simul else "실거래 (!주의!)"
 
     app = QApplication(sys.argv)
+
+    # 오래된 로그 자동 정리
+    clean_old_logs(keep_days=30)
 
     logger.info("=" * 50)
     logger.info(f"키움증권 자동매매 시작 [{mode_str}]")
@@ -84,9 +124,14 @@ def main():
     else:
         strategy = RSIStrategy()
 
-    # 4) 모듈 초기화 (알림 + 모드별 리스크 설정)
+    # 4) 모듈 초기화 (알림 + 안전장치 + 모드별 리스크 설정)
     mdata = MarketDataAPI(kiwoom)
     notifier = Notifier()
+    guard = SafetyGuard(
+        daily_loss_limit_rate=DAILY_LOSS_LIMIT_RATE,
+        max_orders_per_day=MAX_ORDERS_PER_DAY,
+        min_available_cash=MIN_AVAILABLE_CASH,
+    )
 
     if args.mode == "condition":
         trader = Trader(
@@ -95,23 +140,29 @@ def main():
             max_stock_count=COND_MAX_STOCK_COUNT,
             stop_loss_rate=COND_STOP_LOSS_RATE,
             take_profit_rate=COND_TAKE_PROFIT_RATE,
-            notifier=notifier,
+            notifier=notifier, safety_guard=guard,
         )
         logger.info(f"조건검색 모드 리스크 설정 - 1회매수: {COND_MAX_BUY_AMOUNT:,}원, "
                     f"최대종목: {COND_MAX_STOCK_COUNT}개, "
                     f"손절: {COND_STOP_LOSS_RATE:.0%}, 익절: {COND_TAKE_PROFIT_RATE:.0%}")
     else:
         trader = Trader(kiwoom, account, mdata, strategy, is_simul=is_simul,
-                        notifier=notifier)
+                        notifier=notifier, safety_guard=guard)
 
-    # 5) 포지션 동기화
+    report = DailyReport(trader.db, notifier)
+
+    # 5) 포지션 동기화 + 안전장치 기준자산 설정
     summary = trader.sync_positions()
+    guard.set_baseline(summary["total_eval"])
     logger.info(f"계좌 현황 - 총평가: {summary['total_eval']:,}원, "
                 f"수익률: {summary['total_profit_rate']:.2f}%, "
                 f"주문가능: {summary['available']:,}원")
 
-    # 매일 장 종료 후 잔고 저장 (공통)
+    # 일일 손실 한도 점검 (2분마다)
+    schedule.every(2).minutes.do(_check_daily_loss, guard, mdata, account, is_simul)
+    # 매일 장 종료 후 잔고 저장 + 리포트 발송
     schedule.every().day.at("15:40").do(_save_daily_summary, trader, mdata, account, is_simul)
+    schedule.every().day.at("15:45").do(_send_daily_report, report, mdata, account, is_simul)
 
     if args.mode == "condition":
         # ----- 조건검색식 기반 실시간 매매 -----
@@ -150,6 +201,27 @@ def _save_daily_summary(trader, mdata, account, is_simul):
         logger.info(f"일일 결산 저장 완료: 총평가={s['total_eval']:,}원")
     except Exception as e:
         logger.error(f"일일 결산 저장 실패: {e}")
+
+
+def _send_daily_report(report, mdata, account, is_simul):
+    """장 마감 후 일일 리포트를 알림 채널로 발송"""
+    try:
+        result = mdata.get_account_balance(account, is_simul=is_simul)
+        report.send(account_summary=result["summary"])
+        logger.info("일일 리포트 발송 완료")
+    except Exception as e:
+        logger.error(f"일일 리포트 발송 실패: {e}")
+
+
+def _check_daily_loss(guard, mdata, account, is_simul):
+    """일일 손실 한도 도달 여부 점검 (도달 시 매매 자동 중단)"""
+    try:
+        result = mdata.get_account_balance(account, is_simul=is_simul)
+        halted = guard.update_and_check_loss(result["summary"]["total_eval"])
+        if halted:
+            logger.warning("일일 손실 한도 도달 - 신규 매수가 중단됩니다.")
+    except Exception as e:
+        logger.error(f"일일 손실 점검 실패: {e}")
 
 
 if __name__ == "__main__":

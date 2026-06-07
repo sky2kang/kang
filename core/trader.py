@@ -18,11 +18,13 @@ SCREEN_BALANCE = "3001"
 class Trader:
     def __init__(self, kiwoom, account, market_data_api, strategy, is_simul=True,
                  max_buy_amount=None, max_stock_count=None,
-                 stop_loss_rate=None, take_profit_rate=None, notifier=None):
+                 stop_loss_rate=None, take_profit_rate=None, notifier=None,
+                 safety_guard=None):
         """
         리스크 설정은 인자로 주입 가능하며, 미지정 시 config 기본값을 사용한다.
         이를 통해 지표 전략 모드와 조건검색 모드가 서로 다른 한도를 가질 수 있다.
         notifier: utils.notifier.Notifier 인스턴스 (매매 시 알림 전송, 선택)
+        safety_guard: core.safety_guard.SafetyGuard 인스턴스 (안전장치, 선택)
         """
         self.api = kiwoom
         self.account = account
@@ -31,6 +33,7 @@ class Trader:
         self.is_simul = is_simul
         self.db = TradeDB()
         self.notifier = notifier
+        self.guard = safety_guard
 
         # 리스크/한도 설정 (인스턴스별)
         self.max_buy_amount = max_buy_amount if max_buy_amount is not None else MAX_BUY_AMOUNT
@@ -72,6 +75,14 @@ class Trader:
     # -------------------------------------------------------------------------
     def buy(self, code, name, current_price):
         """시장가 매수 주문"""
+        # 안전장치 검사 (일일손실한도/주문횟수/장시간/잔고)
+        if self.guard:
+            available = self.max_buy_amount  # 보수적 추정치
+            ok, reason = self.guard.check_buy(available)
+            if not ok:
+                logger.warning(f"[안전장치] 매수 차단: {reason}")
+                return False
+
         if not self._is_trade_time():
             logger.warning("매매 가능 시간이 아닙니다.")
             return False
@@ -105,6 +116,8 @@ class Trader:
         if ret == 0:
             self.positions[code] = {"name": name, "qty": qty, "avg_price": current_price}
             self.db.save_order(code, name, "BUY", qty, current_price, self.is_simul)
+            if self.guard:
+                self.guard.record_order()
             logger.info(f"[{code}] 매수 주문 전송 성공")
             self._notify(
                 f"🟢 매수: {name}({code})\n"
@@ -145,6 +158,8 @@ class Trader:
         if ret == 0:
             self.db.save_order(code, name, "SELL", qty, 0, self.is_simul, reason)
             del self.positions[code]
+            if self.guard:
+                self.guard.record_order()
             logger.info(f"[{code}] 매도 주문 전송 성공")
             self._notify(
                 f"🔴 매도: {name}({code})\n"

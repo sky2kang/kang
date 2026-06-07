@@ -26,6 +26,11 @@ COND_TAKE_PROFIT_RATE = float(os.getenv("COND_TAKE_PROFIT_RATE", str(TAKE_PROFIT
 TRADE_START_TIME = "09:05"   # 매매 시작 시각 (장 시작 후 5분)
 TRADE_END_TIME = "15:20"     # 매매 종료 시각 (장 마감 10분 전)
 
+# 안전장치 설정 (초보자 보호)
+DAILY_LOSS_LIMIT_RATE = float(os.getenv("DAILY_LOSS_LIMIT_RATE", "-0.10"))  # 일일 손실 한도
+MAX_ORDERS_PER_DAY = int(os.getenv("MAX_ORDERS_PER_DAY", "20"))             # 일일 주문 한도
+MIN_AVAILABLE_CASH = int(os.getenv("MIN_AVAILABLE_CASH", "10000"))         # 최소 주문가능액
+
 # 알림 설정 (둘 다 비워두면 알림 비활성화)
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
