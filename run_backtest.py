@@ -12,12 +12,14 @@ MA 전략과 RSI 전략의 성과를 나란히 비교한다.
 import sys
 import argparse
 import datetime
+import os
 
 from PyQt5.QtWidgets import QApplication
 
 from core.kiwoom import KiwoomAPI
 from core.market_data import MarketDataAPI
 from backtest.engine import BacktestEngine
+from backtest.chart import BacktestChart
 from strategy.ma_strategy import MAStrategy
 from strategy.rsi_strategy import RSIStrategy
 
@@ -40,6 +42,10 @@ def main():
     name = kiwoom.dynamicCall("GetMasterCodeName(QString)", args.code).strip()
     print(f"\n{name}({args.code}) 데이터 {len(df)}일 수집 완료\n")
 
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    chart_dir = os.path.join("backtest", "charts")
+    os.makedirs(chart_dir, exist_ok=True)
+
     strategies = [MAStrategy(5, 20), RSIStrategy()]
     results = []
     for strat in strategies:
@@ -47,6 +53,14 @@ def main():
         result = engine.run(df, args.code)
         results.append(result)
         print(BacktestEngine.report_text(result))
+        print()
+
+        strat_slug = result.get("strategy", "unknown").replace("/", "-").replace(" ", "_")
+        chart_path = os.path.join(
+            chart_dir, f"{args.code}_{strat_slug}_{today}.png"
+        )
+        saved = BacktestChart(result).plot(chart_path)
+        print(f"차트 저장: {saved}")
         print()
 
     # 비교 요약

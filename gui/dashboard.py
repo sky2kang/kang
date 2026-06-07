@@ -6,24 +6,81 @@ GUI 대시보드 (PyQt5)
  - 보유종목 테이블
  - 매매 설정(손절/익절/매수금액/종목수) 입력
  - 매매 시작/중지 버튼
- - 실시간 로그 창
+ - 실시간 로그 창 (logs/trader.log 2초마다 갱신)
  - 안전장치 상태 표시
+ - 스크리닝 탭 (종목 자동 스크리닝)
 
 * 이 모듈은 Windows + PyQt5 환경에서 실행됩니다.
   실행: python -m gui.dashboard  (또는 main.py 에서 --gui 옵션)
 """
 import sys
+import os
 import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QGridLayout, QTableWidget, QTableWidgetItem, QTextEdit, QSpinBox,
-    QDoubleSpinBox, QGroupBox, QComboBox, QMessageBox, QHeaderView
+    QDoubleSpinBox, QGroupBox, QComboBox, QMessageBox, QHeaderView,
+    QLineEdit, QTabWidget, QDialog
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 
+LOG_FILE = os.path.join("logs", "trader.log")
 
+
+# ---------------------------------------------------------------------------
+# 스크리닝 백그라운드 스레드
+# ---------------------------------------------------------------------------
+class _ScreenerThread(QThread):
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(self, screener, codes=None, market="kospi", top_n=50,
+                 parent=None):
+        super().__init__(parent)
+        self._screener = screener
+        self._codes = codes
+        self._market = market
+        self._top_n = top_n
+
+    def run(self):
+        try:
+            if self._codes:
+                results = self._screener.screen(self._codes)
+            else:
+                results = self._screener.screen_from_market(
+                    self._market, self._top_n
+                )
+            self.finished.emit(results)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 분석 상세 팝업
+# ---------------------------------------------------------------------------
+class _AnalysisDialog(QDialog):
+    def __init__(self, report_text, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("종목 상세 분석")
+        self.resize(520, 420)
+        layout = QVBoxLayout(self)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(report_text)
+        text_edit.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 12px;"
+        )
+        layout.addWidget(text_edit)
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
+
+
+# ---------------------------------------------------------------------------
+# 메인 대시보드
+# ---------------------------------------------------------------------------
 class Dashboard(QWidget):
     def __init__(self, controller=None):
         """
@@ -33,28 +90,50 @@ class Dashboard(QWidget):
         super().__init__()
         self.controller = controller
         self.is_running = False
+        self._log_pos = 0          # 로그 파일 읽기 위치
+        self._screener = None      # StockScreener 인스턴스 (선택)
+        self._screener_thread = None
+        self._screener_data = {}   # 스크리닝 결과 캐시 (code -> row dict)
         self._init_ui()
 
-        # 1초마다 화면 갱신
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(1000)
+        # 1초마다 계좌/안전장치 갱신
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh)
+        self.refresh_timer.start(1000)
+
+        # 2초마다 로그 파일 테일
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self._tail_log)
+        self.log_timer.start(2000)
 
     # -------------------------------------------------------------------------
     def _init_ui(self):
         self.setWindowTitle("키움 자동매매 대시보드")
-        self.resize(900, 700)
+        self.resize(960, 750)
         root = QVBoxLayout(self)
 
-        root.addWidget(self._build_account_box())
-        root.addWidget(self._build_holdings_box())
+        tabs = QTabWidget()
+        tabs.addTab(self._build_main_tab(), "대시보드")
+        tabs.addTab(self._build_screener_tab(), "스크리닝")
+        root.addWidget(tabs)
+
+    # -------------------------------------------------------------------------
+    # 메인 탭
+    # -------------------------------------------------------------------------
+    def _build_main_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        layout.addWidget(self._build_account_box())
+        layout.addWidget(self._build_holdings_box())
 
         mid = QHBoxLayout()
         mid.addWidget(self._build_settings_box(), 1)
         mid.addWidget(self._build_control_box(), 1)
-        root.addLayout(mid)
+        layout.addLayout(mid)
 
-        root.addWidget(self._build_log_box())
+        layout.addWidget(self._build_log_box())
+        return widget
 
     # ----- 계좌 현황 -----
     def _build_account_box(self):
@@ -118,6 +197,15 @@ class Dashboard(QWidget):
 
         self.combo_strategy = QComboBox()
         self.combo_strategy.addItems(["이동평균(MA)", "RSI", "조건검색식"])
+        self.combo_strategy.currentTextChanged.connect(
+            self._on_strategy_changed
+        )
+
+        self.lbl_cond = QLabel("조건식 이름:")
+        self.edit_condition = QLineEdit()
+        self.edit_condition.setPlaceholderText("조건검색식 이름 입력")
+        self.lbl_cond.setVisible(False)
+        self.edit_condition.setVisible(False)
 
         layout.addWidget(QLabel("1회 매수금액:"), 0, 0)
         layout.addWidget(self.spin_buy_amount, 0, 1)
@@ -129,7 +217,14 @@ class Dashboard(QWidget):
         layout.addWidget(self.spin_take_profit, 3, 1)
         layout.addWidget(QLabel("전략:"), 4, 0)
         layout.addWidget(self.combo_strategy, 4, 1)
+        layout.addWidget(self.lbl_cond, 5, 0)
+        layout.addWidget(self.edit_condition, 5, 1)
         return box
+
+    def _on_strategy_changed(self, text):
+        is_cond = text == "조건검색식"
+        self.lbl_cond.setVisible(is_cond)
+        self.edit_condition.setVisible(is_cond)
 
     # ----- 제어 버튼 -----
     def _build_control_box(self):
@@ -168,10 +263,35 @@ class Dashboard(QWidget):
         return box
 
     # -------------------------------------------------------------------------
+    # 스크리닝 탭
+    # -------------------------------------------------------------------------
+    def _build_screener_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        ctrl_layout = QHBoxLayout()
+        self.btn_screen = QPushButton("스크리닝 실행")
+        self.btn_screen.clicked.connect(self._run_screener)
+        self.lbl_screen_status = QLabel("대기 중")
+        ctrl_layout.addWidget(self.btn_screen)
+        ctrl_layout.addWidget(self.lbl_screen_status)
+        ctrl_layout.addStretch()
+        layout.addLayout(ctrl_layout)
+
+        self.screen_table = QTableWidget(0, 8)
+        self.screen_table.setHorizontalHeaderLabels(
+            ["코드", "종목명", "현재가", "점수", "의견", "RSI", "거래량배수", "분석"]
+        )
+        self.screen_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch
+        )
+        layout.addWidget(self.screen_table)
+        return widget
+
+    # -------------------------------------------------------------------------
     # 버튼 핸들러
     # -------------------------------------------------------------------------
     def on_start(self):
-        # 실거래 모드면 이중 확인
         if self.lbl_mode.text() == "실거래":
             reply = QMessageBox.question(
                 self, "실거래 확인",
@@ -186,6 +306,7 @@ class Dashboard(QWidget):
             "stop_loss": self.spin_stop_loss.value() / 100,
             "take_profit": self.spin_take_profit.value() / 100,
             "strategy": self.combo_strategy.currentText(),
+            "condition_name": self.edit_condition.text().strip(),
         }
         if self.controller:
             self.controller.start(settings)
@@ -244,15 +365,131 @@ class Dashboard(QWidget):
             self.table.setItem(i, 0, QTableWidgetItem(str(h.get("name", ""))))
             self.table.setItem(i, 1, QTableWidgetItem(str(h.get("code", ""))))
             self.table.setItem(i, 2, QTableWidgetItem(f"{h.get('qty', 0):,}"))
-            self.table.setItem(i, 3, QTableWidgetItem(f"{h.get('avg_price', 0):,}"))
+            self.table.setItem(
+                i, 3, QTableWidgetItem(f"{h.get('avg_price', 0):,}")
+            )
             rate = h.get("profit_rate", 0)
             item = QTableWidgetItem(f"{rate:.2f}%")
             item.setForeground(QColor("red") if rate >= 0 else QColor("blue"))
             self.table.setItem(i, 4, item)
 
+    # -------------------------------------------------------------------------
+    # 로그 파일 테일
+    # -------------------------------------------------------------------------
+    def _tail_log(self):
+        """logs/trader.log 파일에서 새 줄을 읽어 로그 뷰에 추가"""
+        if not os.path.exists(LOG_FILE):
+            return
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(self._log_pos)
+                new_lines = f.read()
+                self._log_pos = f.tell()
+            if new_lines.strip():
+                self.log_view.append(new_lines.rstrip())
+        except Exception:
+            pass
+
     def append_log(self, message):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_view.append(f"[{ts}] {message}")
+
+    # -------------------------------------------------------------------------
+    # 스크리닝
+    # -------------------------------------------------------------------------
+    def set_screener(self, screener):
+        """외부에서 StockScreener 인스턴스를 주입"""
+        self._screener = screener
+
+    def _run_screener(self):
+        if self._screener is None:
+            QMessageBox.warning(
+                self, "스크리닝 오류",
+                "스크리너가 초기화되지 않았습니다.\n"
+                "controller.start() 후 재시도하세요."
+            )
+            return
+        if self._screener_thread and self._screener_thread.isRunning():
+            return
+
+        self.btn_screen.setEnabled(False)
+        self.lbl_screen_status.setText("스크리닝 중...")
+
+        self._screener_thread = _ScreenerThread(self._screener)
+        self._screener_thread.finished.connect(self._on_screener_done)
+        self._screener_thread.error.connect(self._on_screener_error)
+        self._screener_thread.start()
+
+    def _on_screener_done(self, results):
+        self.btn_screen.setEnabled(True)
+        self.lbl_screen_status.setText(f"완료: {len(results)}개 선별")
+        self._populate_screen_table(results)
+
+    def _on_screener_error(self, msg):
+        self.btn_screen.setEnabled(True)
+        self.lbl_screen_status.setText(f"오류: {msg}")
+
+    def _populate_screen_table(self, results):
+        self.screen_table.setRowCount(len(results))
+        self._screener_data = {}
+        for i, r in enumerate(results):
+            code = r.get("code", "")
+            self._screener_data[code] = r
+            rsi_str = (
+                f"{r['rsi']:.1f}" if r.get("rsi") is not None else "N/A"
+            )
+            self.screen_table.setItem(i, 0, QTableWidgetItem(code))
+            self.screen_table.setItem(
+                i, 1, QTableWidgetItem(r.get("name", ""))
+            )
+            self.screen_table.setItem(
+                i, 2, QTableWidgetItem(f"{r.get('price', 0):,}")
+            )
+            self.screen_table.setItem(
+                i, 3, QTableWidgetItem(f"{r.get('score', 0):.1f}")
+            )
+            self.screen_table.setItem(
+                i, 4, QTableWidgetItem(r.get("opinion", ""))
+            )
+            self.screen_table.setItem(i, 5, QTableWidgetItem(rsi_str))
+            self.screen_table.setItem(
+                i, 6, QTableWidgetItem(f"{r.get('volume_ratio', 0):.2f}")
+            )
+            btn_analyze = QPushButton("분석")
+            btn_analyze.clicked.connect(
+                lambda _checked, c=code: self._show_analysis(c)
+            )
+            self.screen_table.setCellWidget(i, 7, btn_analyze)
+
+    def _show_analysis(self, code):
+        """지정 코드의 StockAnalyzer.report_text() 를 팝업으로 표시"""
+        import datetime as _dt
+        try:
+            from core.analyzer import StockAnalyzer
+
+            start_date = (
+                _dt.datetime.now() - _dt.timedelta(days=60)
+            ).strftime("%Y%m%d")
+
+            mdata = None
+            if self.controller:
+                mdata = getattr(self.controller, "_market_data", None)
+
+            if mdata is None:
+                QMessageBox.warning(self, "분석 오류",
+                                    "MarketDataAPI가 초기화되지 않았습니다.")
+                return
+
+            df = mdata.get_daily_ohlcv(code, start_date)
+            r = self._screener_data.get(code, {})
+            name = r.get("name", code)
+            analyzer = StockAnalyzer(df)
+            text = analyzer.report_text(code=code, name=name)
+        except Exception as exc:
+            text = f"분석 오류: {exc}"
+
+        dlg = _AnalysisDialog(text, self)
+        dlg.exec_()
 
 
 def run_gui(controller=None):
