@@ -73,8 +73,15 @@ class Trader:
     # -------------------------------------------------------------------------
     # 매수
     # -------------------------------------------------------------------------
-    def buy(self, code, name, current_price, amount=None):
-        """시장가 매수 주문. amount: 매수금액(원), None이면 인스턴스 max_buy_amount 사용"""
+    def buy(self, code, name, current_price, amount=None, add=False):
+        """시장가 매수 주문.
+
+        amount: 매수금액(원), None이면 인스턴스 max_buy_amount 사용
+        add=True: 분할매수(물타기) — 기존 보유 종목에 추가 매수하여 평단가를 갱신.
+                  최대 보유 종목수 제한과 '이미 보유 중' 차단을 건너뛴다.
+        """
+        existing = code in self.positions
+
         # 안전장치 검사 (일일손실한도/주문횟수/장시간/잔고)
         if self.guard:
             available = amount if amount else self.max_buy_amount  # 보수적 추정치
@@ -87,13 +94,13 @@ class Trader:
             logger.warning("매매 가능 시간이 아닙니다.")
             return False
 
-        if len(self.positions) >= self.max_stock_count:
-            logger.warning(f"최대 보유 종목수({self.max_stock_count}) 초과")
-            return False
-
-        if code in self.positions:
-            logger.info(f"[{code}] 이미 보유 중")
-            return False
+        if not add:
+            if len(self.positions) >= self.max_stock_count:
+                logger.warning(f"최대 보유 종목수({self.max_stock_count}) 초과")
+                return False
+            if existing:
+                logger.info(f"[{code}] 이미 보유 중")
+                return False
 
         if current_price <= 0:
             logger.warning(f"[{code}] 현재가를 확인할 수 없어 매수를 건너뜁니다 (시세 미수신)")
@@ -105,7 +112,8 @@ class Trader:
             logger.warning(f"[{code}] 매수 가능 수량 부족 (price={current_price:,})")
             return False
 
-        logger.info(f"[{code}] {name} 매수 주문: {qty}주 @ 시장가 (약 {qty * current_price:,}원)")
+        kind = "분할매수" if (add and existing) else "매수"
+        logger.info(f"[{code}] {name} {kind} 주문: {qty}주 @ 시장가 (약 {qty * current_price:,}원)")
 
         ret = self.api.send_order(
             rq_name="시장가매수",
@@ -119,19 +127,28 @@ class Trader:
         )
 
         if ret == 0:
-            self.positions[code] = {"name": name, "qty": qty, "avg_price": current_price}
+            if existing:
+                # 분할매수: 가중평균으로 평단가 갱신
+                pos = self.positions[code]
+                total_qty = pos["qty"] + qty
+                pos["avg_price"] = round(
+                    (pos["avg_price"] * pos["qty"] + current_price * qty) / total_qty)
+                pos["qty"] = total_qty
+                logger.info(f"[{code}] 분할매수 후 보유 {total_qty}주, 평단가 {pos['avg_price']:,}원")
+            else:
+                self.positions[code] = {"name": name, "qty": qty, "avg_price": current_price}
             self.db.save_order(code, name, "BUY", qty, current_price, self.is_simul)
             if self.guard:
                 self.guard.record_order()
-            logger.info(f"[{code}] 매수 주문 전송 성공")
+            logger.info(f"[{code}] {kind} 주문 전송 성공")
             self._notify(
-                f"🟢 매수: {name}({code})\n"
+                f"🟢 {kind}: {name}({code})\n"
                 f"수량: {qty}주 @ 시장가 (약 {qty * current_price:,}원)\n"
                 f"모드: {'모의투자' if self.is_simul else '실거래'}"
             )
             return True
         else:
-            logger.error(f"[{code}] 매수 주문 전송 실패: ret={ret}")
+            logger.error(f"[{code}] {kind} 주문 전송 실패: ret={ret}")
             return False
 
     # -------------------------------------------------------------------------

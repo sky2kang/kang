@@ -314,7 +314,8 @@ class SearchTab(QWidget):
 # =========================================================================
 class ConditionTab(QWidget):
     """조건검색 기반 실시간 자동매매 관리 화면 (최대 10개 조건식)."""
-    COLS = ["사용", "조건식", "편입매수", "이탈매도", "매수금액", "손절", "익절", "트레일링", "매칭"]
+    COLS = ["사용", "조건식", "편입매수", "이탈매도", "매수금액", "손절", "익절",
+            "트레일링", "분할", "분할간격", "매칭"]
 
     def __init__(self, win):
         super().__init__()
@@ -424,6 +425,12 @@ class ConditionTab(QWidget):
         trail = QDoubleSpinBox(); trail.setRange(0.0, 50.0); trail.setDecimals(1); trail.setSuffix(" %")
         trail.setValue(float(rule.get("trailing_stop", 0)))
         trail.setToolTip("0이면 비활성. 수익 구간에서 고점 대비 이 비율만큼 하락 시 매도")
+        split = QSpinBox(); split.setRange(1, 10)
+        split.setValue(int(rule.get("split_count", 1)))
+        split.setToolTip("분할매수 차수. 1이면 분할 안 함.\n매수금액을 차수로 나눠 1차 진입 후 하락 시 추가매수")
+        step = QDoubleSpinBox(); step.setRange(0.0, 50.0); step.setDecimals(1); step.setSuffix(" %")
+        step.setValue(float(rule.get("split_step", 3.0)))
+        step.setToolTip("직전 매수가 대비 이 비율만큼 하락하면 다음 차수 추가매수 (분할 2 이상일 때)")
 
         name_item = QTableWidgetItem(f"[{idx}] {disp}")
         name_item.setFlags(Qt.ItemIsEnabled)
@@ -439,11 +446,14 @@ class ConditionTab(QWidget):
         self.rule_table.setCellWidget(r, 5, stop)
         self.rule_table.setCellWidget(r, 6, take)
         self.rule_table.setCellWidget(r, 7, trail)
-        self.rule_table.setItem(r, 8, match_item)
+        self.rule_table.setCellWidget(r, 8, split)
+        self.rule_table.setCellWidget(r, 9, step)
+        self.rule_table.setItem(r, 10, match_item)
 
         row = {"idx": idx, "name": name, "disp": disp, "use": use_cb, "buy": buy_cb,
                "sell": sell_cb, "amount": amount, "stop": stop, "take": take,
-               "trail": trail, "match": match_item, "count": 0}
+               "trail": trail, "split": split, "step": step,
+               "match": match_item, "count": 0}
         self.cond_rows.append(row)
         self.row_by_idx[idx] = row
 
@@ -465,6 +475,8 @@ class ConditionTab(QWidget):
                 "stop_loss": round(row["stop"].value(), 1),
                 "take_profit": round(row["take"].value(), 1),
                 "trailing_stop": round(row["trail"].value(), 1),
+                "split_count": row["split"].value(),
+                "split_step": round(row["step"].value(), 1),
             }
         return rules
 
@@ -533,7 +545,7 @@ class ConditionTab(QWidget):
         liq_msg = f" · 당일청산 {self.liq_time.time().toString('HH:mm')}" if self.liq_chk.isChecked() else ""
         self.status_lbl.setText(
             f"실행중 — 조건식 {len(self.engine.active)}개 실시간 등록 / "
-            f"편입매수·이탈매도·손절익절·트레일링 작동{liq_msg}")
+            f"편입매수·분할매수·이탈매도·손절익절·트레일링 작동{liq_msg}")
 
     def _check_liquidation(self):
         """당일청산 시각 도달 시 전량 매도 (1회만)."""

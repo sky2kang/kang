@@ -32,6 +32,7 @@ class ConditionAutoTrader:
         self.active = []            # [(screen, name, idx)]
         self.code_cond = {}         # code -> idx(str), 매수 근거 조건식
         self.code_peak = {}         # code -> 보유 후 최고가 (트레일링 스탑용)
+        self.code_tranche = {}      # code -> 분할매수 상태 {done,target,amount,last_buy}
         self.watched = set()        # 실시간 시세 등록된 종목
 
     # ------------------------------------------------------------ 시작/중지
@@ -74,6 +75,7 @@ class ConditionAutoTrader:
             pass
         self.watched.clear()
         self.code_peak.clear()
+        self.code_tranche.clear()
         self.running = False
         self._notify("stop")
         logger.info("조건 자동매매 중지")
@@ -106,12 +108,22 @@ class ConditionAutoTrader:
             logger.error(f"[{code}] 시세 조회 실패: {e}")
             return
         name = self.kiwoom.get_master_code_name(code)
-        amount = int(rule.get("buy_amount") or 0) or None
-        if self.trader.buy(code, name, info["price"], amount=amount):
+        total_amount = int(rule.get("buy_amount") or 0) or self.trader.max_buy_amount
+        split_count = max(1, int(rule.get("split_count") or 1))
+        tranche_amount = max(1, total_amount // split_count)
+
+        if self.trader.buy(code, name, info["price"], amount=tranche_amount):
             self.code_cond[code] = str(cond_index)
             self.code_peak[code] = info["price"]
+            self.code_tranche[code] = {
+                "done": 1, "target": split_count,
+                "amount": tranche_amount, "last_buy": info["price"],
+            }
             self._register_price(code)
             self._notify("buy", code=code, name=name, price=info["price"], cond=cond_index)
+            if split_count > 1:
+                logger.info(f"[분할매수] {code} 1/{split_count}차 진입 "
+                            f"(차수당 {tranche_amount:,}원, 하락 시 추가매수)")
 
     def _handle_exit(self, code, reason="이탈"):
         if code not in self.trader.positions:
@@ -120,6 +132,7 @@ class ConditionAutoTrader:
         if self.trader.sell(code, reason=reason):
             self.code_cond.pop(code, None)
             self.code_peak.pop(code, None)
+            self.code_tranche.pop(code, None)
             self._notify("sell", code=code, name=name, reason=reason)
 
     def liquidate_all(self, reason="당일청산"):
@@ -174,6 +187,28 @@ class ConditionAutoTrader:
         # 3) 익절 (고정 목표)
         if take is not None and profit >= take / 100.0:
             self._handle_exit(code, reason=f"익절({profit:.1%})")
+            return
+        # 4) 분할매수(물타기) — 청산 조건 미충족 시, 직전 매수가 대비 하락하면 추가 매수
+        self._maybe_scale_in(code, price, rule)
+
+    def _maybe_scale_in(self, code, price, rule):
+        """분할매수: 남은 차수가 있고 직전 매수가 대비 split_step% 하락 시 추가 매수."""
+        if self.halted:
+            return
+        st = self.code_tranche.get(code)
+        if not st or st["done"] >= st["target"]:
+            return
+        step = rule.get("split_step") or 0
+        if step <= 0:
+            return
+        if price <= st["last_buy"] * (1 - step / 100.0):
+            name = self.kiwoom.get_master_code_name(code)
+            if self.trader.buy(code, name, price, amount=st["amount"], add=True):
+                st["done"] += 1
+                st["last_buy"] = price
+                logger.info(f"[분할매수] {code} {st['done']}/{st['target']}차 추가매수 @ {price:,}")
+                self._notify("buy", code=code, name=name, price=price,
+                             cond=self.code_cond.get(code))
 
     def _on_chejan(self, data):
         self._notify("chejan", **data)
