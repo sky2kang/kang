@@ -41,6 +41,9 @@ python main.py --strategy rsi
 # 조건검색식 기반 매매 (HTS에서 만든 조건식 이름 지정)
 python main.py --mode condition --condition "급등주포착"
 
+# 여러 조건식 동시 운영 (쉼표로 구분)
+python main.py --mode condition --condition "급등주포착,눌림목공략"
+
 # 실거래 모드 (주의!)
 python main.py --simul false
 ```
@@ -70,6 +73,47 @@ HTS(영웅문)에서 직접 만든 **조건검색식**을 실시간으로 받아
 > 조건식은 서버에 저장되어야 API가 불러올 수 있습니다.
 > 로컬에만 있는 조건식은 인식되지 않으니 반드시 **저장** 하세요.
 
+### 조건검색 모드 전용 리스크 설정
+지표 전략 모드와 별개로 조건검색 모드만의 매수금액/종목수/손절·익절을 `.env`에서 지정할 수 있습니다.
+미지정 시 일반 설정값을 그대로 사용합니다.
+
+```
+COND_MAX_BUY_AMOUNT=500000   # 조건검색 1회 매수금액
+COND_MAX_STOCK_COUNT=10      # 조건검색 최대 보유 종목수
+COND_STOP_LOSS_RATE=-0.03    # 조건검색 손절 (-3%)
+COND_TAKE_PROFIT_RATE=0.05   # 조건검색 익절 (+5%)
+```
+
+### 여러 조건식 동시 운영
+쉼표로 여러 조건식을 넘기면 각각 별도 화면번호로 동시에 실시간 감시합니다.
+어느 조건식이든 종목이 편입되면 매수, 매수했던 조건에서 이탈하면 매도합니다.
+
+---
+
+## 매매 알림 (슬랙 / 텔레그램)
+
+매수·매도 체결 시 슬랙 또는 텔레그램으로 실시간 알림을 받을 수 있습니다.
+`.env`에 사용할 채널 정보만 입력하면 자동 활성화됩니다 (둘 다 비우면 비활성화).
+
+### 슬랙 설정
+1. Slack → Apps → **Incoming Webhooks** 추가
+2. 채널 선택 후 Webhook URL 복사
+3. `.env`에 입력:
+   ```
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+   ```
+
+### 텔레그램 설정
+1. 텔레그램에서 **@BotFather** 로 봇 생성 → 토큰 발급
+2. 봇과 대화 시작 후 `@userinfobot` 으로 본인 Chat ID 확인
+3. `.env`에 입력:
+   ```
+   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+   TELEGRAM_CHAT_ID=987654321
+   ```
+
+> 알림 전송 실패(네트워크 오류 등)는 매매 로직에 영향을 주지 않고 로그만 남깁니다.
+
 ---
 
 ## 프로젝트 구조
@@ -96,6 +140,7 @@ kang/
 │
 ├── utils/
 │   ├── logger.py            # 로테이팅 파일 로거
+│   ├── notifier.py          # 슬랙/텔레그램 매매 알림
 │   └── db.py                # SQLite 매매 기록 DB
 │
 ├── logs/                    # 실행 로그 저장

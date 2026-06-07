@@ -16,13 +16,29 @@ SCREEN_BALANCE = "3001"
 
 
 class Trader:
-    def __init__(self, kiwoom, account, market_data_api, strategy, is_simul=True):
+    def __init__(self, kiwoom, account, market_data_api, strategy, is_simul=True,
+                 max_buy_amount=None, max_stock_count=None,
+                 stop_loss_rate=None, take_profit_rate=None, notifier=None):
+        """
+        리스크 설정은 인자로 주입 가능하며, 미지정 시 config 기본값을 사용한다.
+        이를 통해 지표 전략 모드와 조건검색 모드가 서로 다른 한도를 가질 수 있다.
+        notifier: utils.notifier.Notifier 인스턴스 (매매 시 알림 전송, 선택)
+        """
         self.api = kiwoom
         self.account = account
         self.mdata = market_data_api
         self.strategy = strategy
         self.is_simul = is_simul
         self.db = TradeDB()
+        self.notifier = notifier
+
+        # 리스크/한도 설정 (인스턴스별)
+        self.max_buy_amount = max_buy_amount if max_buy_amount is not None else MAX_BUY_AMOUNT
+        self.max_stock_count = max_stock_count if max_stock_count is not None else MAX_STOCK_COUNT
+        self.stop_loss_rate = stop_loss_rate if stop_loss_rate is not None else STOP_LOSS_RATE
+        self.take_profit_rate = (
+            take_profit_rate if take_profit_rate is not None else TAKE_PROFIT_RATE
+        )
 
         # 포지션 캐시 {code: {qty, avg_price, name}}
         self.positions = {}
@@ -60,15 +76,15 @@ class Trader:
             logger.warning("매매 가능 시간이 아닙니다.")
             return False
 
-        if len(self.positions) >= MAX_STOCK_COUNT:
-            logger.warning(f"최대 보유 종목수({MAX_STOCK_COUNT}) 초과")
+        if len(self.positions) >= self.max_stock_count:
+            logger.warning(f"최대 보유 종목수({self.max_stock_count}) 초과")
             return False
 
         if code in self.positions:
             logger.info(f"[{code}] 이미 보유 중")
             return False
 
-        qty = MAX_BUY_AMOUNT // current_price
+        qty = self.max_buy_amount // current_price
         if qty < 1:
             logger.warning(f"[{code}] 매수 가능 수량 부족 (price={current_price:,})")
             return False
@@ -90,6 +106,11 @@ class Trader:
             self.positions[code] = {"name": name, "qty": qty, "avg_price": current_price}
             self.db.save_order(code, name, "BUY", qty, current_price, self.is_simul)
             logger.info(f"[{code}] 매수 주문 전송 성공")
+            self._notify(
+                f"🟢 매수: {name}({code})\n"
+                f"수량: {qty}주 @ 시장가 (약 {qty * current_price:,}원)\n"
+                f"모드: {'모의투자' if self.is_simul else '실거래'}"
+            )
             return True
         else:
             logger.error(f"[{code}] 매수 주문 전송 실패: ret={ret}")
@@ -125,6 +146,11 @@ class Trader:
             self.db.save_order(code, name, "SELL", qty, 0, self.is_simul, reason)
             del self.positions[code]
             logger.info(f"[{code}] 매도 주문 전송 성공")
+            self._notify(
+                f"🔴 매도: {name}({code})\n"
+                f"수량: {qty}주 @ 시장가\n"
+                f"사유: {reason}"
+            )
             return True
         else:
             logger.error(f"[{code}] 매도 주문 전송 실패: ret={ret}")
@@ -180,12 +206,23 @@ class Trader:
             try:
                 info = self.mdata.get_stock_info(code)
                 profit_rate = (info["price"] - pos["avg_price"]) / pos["avg_price"]
-                if profit_rate <= STOP_LOSS_RATE:
+                if profit_rate <= self.stop_loss_rate:
                     self.sell(code, reason=f"손절({profit_rate:.2%})")
-                elif profit_rate >= TAKE_PROFIT_RATE:
+                elif profit_rate >= self.take_profit_rate:
                     self.sell(code, reason=f"익절({profit_rate:.2%})")
             except Exception as e:
                 logger.error(f"[{code}] 리스크 점검 오류: {e}")
+
+    # -------------------------------------------------------------------------
+    # 알림 전송 헬퍼
+    # -------------------------------------------------------------------------
+    def _notify(self, message):
+        """notifier가 설정된 경우 알림 전송 (실패해도 매매에 영향 없음)"""
+        if self.notifier:
+            try:
+                self.notifier.send(message)
+            except Exception as e:
+                logger.error(f"알림 전송 실패: {e}")
 
 
 def _days_ago(n):

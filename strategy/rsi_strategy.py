@@ -3,7 +3,6 @@ RSI 과매수/과매도 전략
 - 매수: RSI < 30 (과매도 구간 진입 후 반등)
 - 매도: RSI > 70 (과매수 구간) 또는 손절/익절
 """
-import pandas as pd
 import numpy as np
 from config.settings import STOP_LOSS_RATE, TAKE_PROFIT_RATE
 from strategy.base_strategy import BaseStrategy

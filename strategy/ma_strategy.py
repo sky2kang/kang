@@ -3,7 +3,6 @@
 - 매수: 단기 MA가 장기 MA를 상향 돌파 (골든크로스)
 - 매도: 단기 MA가 장기 MA를 하향 돌파 (데드크로스) 또는 손절/익절
 """
-import pandas as pd
 from config.settings import STOP_LOSS_RATE, TAKE_PROFIT_RATE
 from strategy.base_strategy import BaseStrategy
 from utils.logger import get_logger
@@ -38,7 +37,8 @@ class MAStrategy(BaseStrategy):
 
         cross = (prev["ma_short"] <= prev["ma_long"]) and (curr["ma_short"] > curr["ma_long"])
         if cross:
-            logger.info(f"[{code}] 골든크로스 매수 신호: 단기MA={curr['ma_short']:.1f}, 장기MA={curr['ma_long']:.1f}")
+            logger.info(f"[{code}] 골든크로스 매수 신호: "
+                        f"단기MA={curr['ma_short']:.1f}, 장기MA={curr['ma_long']:.1f}")
         return cross
 
     def should_sell(self, df, code, avg_price, current_price) -> bool:

@@ -27,7 +27,8 @@ class MarketDataAPI:
         self.api.set_input_value("종목코드", code)
         self.api.comm_rq_data("주식기본정보", "opt10001", 0, "1000")
 
-        price = int(self.api.get_comm_data("opt10001", "주식기본정보", 0, "현재가").replace("-", "").replace("+", ""))
+        raw_price = self.api.get_comm_data("opt10001", "주식기본정보", 0, "현재가")
+        price = int(raw_price.replace("-", "").replace("+", ""))
         volume = int(self.api.get_comm_data("opt10001", "주식기본정보", 0, "거래량").replace(",", ""))
         change_rate = float(self.api.get_comm_data("opt10001", "주식기본정보", 0, "등락율").replace("%", ""))
 
@@ -105,7 +106,8 @@ class MarketDataAPI:
             dt = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "체결시간")
             close = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "현재가")
             volume = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "거래량")
-            rows.append({"datetime": dt.strip(), "close": abs(int(close)), "volume": abs(int(volume))})
+            rows.append({"datetime": dt.strip(), "close": abs(int(close)),
+                         "volume": abs(int(volume))})
 
         df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["datetime"], format="%Y%m%d%H%M%S")

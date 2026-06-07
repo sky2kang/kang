@@ -13,7 +13,11 @@ import time
 
 from PyQt5.QtWidgets import QApplication
 
-from config.settings import IS_SIMUL, ACCOUNT_NUMBER
+from config.settings import (
+    IS_SIMUL, ACCOUNT_NUMBER,
+    COND_MAX_BUY_AMOUNT, COND_MAX_STOCK_COUNT,
+    COND_STOP_LOSS_RATE, COND_TAKE_PROFIT_RATE,
+)
 from core.kiwoom import KiwoomAPI
 from core.market_data import MarketDataAPI
 from core.trader import Trader
@@ -21,6 +25,7 @@ from core.condition_trader import ConditionTrader
 from strategy.ma_strategy import MAStrategy
 from strategy.rsi_strategy import RSIStrategy
 from utils.logger import get_logger
+from utils.notifier import Notifier
 
 logger = get_logger("main")
 
@@ -45,7 +50,8 @@ def parse_args():
                         help="strategy: 지표 전략 매매, condition: HTS 조건검색식 매매")
     parser.add_argument("--strategy", choices=["ma", "rsi"], default="ma")
     parser.add_argument("--condition", default="",
-                        help="조건검색 모드에서 사용할 HTS 조건식 이름")
+                        help="조건검색 모드 조건식 이름. 여러 개는 쉼표로 구분 "
+                             "(예: \"급등주포착,눌림목공략\")")
     parser.add_argument("--simul", choices=["true", "false"], default=str(IS_SIMUL).lower())
     return parser.parse_args()
 
@@ -78,9 +84,25 @@ def main():
     else:
         strategy = RSIStrategy()
 
-    # 4) 모듈 초기화
+    # 4) 모듈 초기화 (알림 + 모드별 리스크 설정)
     mdata = MarketDataAPI(kiwoom)
-    trader = Trader(kiwoom, account, mdata, strategy, is_simul=is_simul)
+    notifier = Notifier()
+
+    if args.mode == "condition":
+        trader = Trader(
+            kiwoom, account, mdata, strategy, is_simul=is_simul,
+            max_buy_amount=COND_MAX_BUY_AMOUNT,
+            max_stock_count=COND_MAX_STOCK_COUNT,
+            stop_loss_rate=COND_STOP_LOSS_RATE,
+            take_profit_rate=COND_TAKE_PROFIT_RATE,
+            notifier=notifier,
+        )
+        logger.info(f"조건검색 모드 리스크 설정 - 1회매수: {COND_MAX_BUY_AMOUNT:,}원, "
+                    f"최대종목: {COND_MAX_STOCK_COUNT}개, "
+                    f"손절: {COND_STOP_LOSS_RATE:.0%}, 익절: {COND_TAKE_PROFIT_RATE:.0%}")
+    else:
+        trader = Trader(kiwoom, account, mdata, strategy, is_simul=is_simul,
+                        notifier=notifier)
 
     # 5) 포지션 동기화
     summary = trader.sync_positions()
@@ -96,12 +118,16 @@ def main():
         if not args.condition:
             logger.error("조건검색 모드는 --condition '조건식이름' 인자가 필요합니다.")
             return
+        # 쉼표로 구분된 여러 조건식 지원
+        cond_names = [c.strip() for c in args.condition.split(",") if c.strip()]
         cond_trader = ConditionTrader(kiwoom, trader, mdata)
-        cond_trader.start(args.condition)
+        cond_trader.start(cond_names)
         # 손절/익절은 3분마다 보유종목 리스크 점검으로 적용
         schedule.every(3).minutes.do(trader.check_risk)
-        logger.info(f"조건검색 자동매매 가동: [{args.condition}] "
+        logger.info(f"조건검색 자동매매 가동: {cond_names} "
                     f"(편입→매수 / 이탈→매도, 손절/익절 3분 점검)")
+        notifier.send(f"⚙️ 조건검색 자동매매 시작: {cond_names} "
+                      f"[{'모의투자' if is_simul else '실거래'}]")
     else:
         # ----- 지표 전략 기반 매매 (5분 주기) -----
         schedule.every(5).minutes.do(trader.run_strategy, watch_list=WATCH_LIST)
