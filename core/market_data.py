@@ -15,6 +15,22 @@ FID_LOW = 18              # 저가
 FID_OPEN = 16             # 시가
 
 
+def _safe_int(s, default=0):
+    """빈 문자열/오류 시 default 반환하는 안전한 int 파싱."""
+    try:
+        return int(str(s).strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(s, default=0.0):
+    """빈 문자열/오류 시 default 반환하는 안전한 float 파싱."""
+    try:
+        return float(str(s).strip())
+    except (ValueError, TypeError):
+        return default
+
+
 class MarketDataAPI:
     def __init__(self, kiwoom):
         self.api = kiwoom
@@ -23,20 +39,29 @@ class MarketDataAPI:
     # 현재가 조회 (opt10001 - 주식기본정보)
     # -------------------------------------------------------------------------
     def get_stock_info(self, code):
-        """종목 현재가 및 기본 정보 조회"""
+        """종목 현재가 및 기본 정보 조회.
+
+        모의투자 서버는 일부 종목 시세를 빈 값('')으로 반환하므로,
+        파싱 실패 시 예외를 던지지 않고 0/없음으로 처리한다.
+        반환 dict 의 'available' 가 False 면 시세를 받지 못한 것이다.
+        """
         self.api.set_input_value("종목코드", code)
         self.api.comm_rq_data("주식기본정보", "opt10001", 0, "1000")
 
         raw_price = self.api.get_comm_data("opt10001", "주식기본정보", 0, "현재가")
-        price = int(raw_price.replace("-", "").replace("+", ""))
-        volume = int(self.api.get_comm_data("opt10001", "주식기본정보", 0, "거래량").replace(",", ""))
-        change_rate = float(self.api.get_comm_data("opt10001", "주식기본정보", 0, "등락율").replace("%", ""))
+        raw_volume = self.api.get_comm_data("opt10001", "주식기본정보", 0, "거래량")
+        raw_rate = self.api.get_comm_data("opt10001", "주식기본정보", 0, "등락율")
+
+        price = _safe_int(raw_price.replace("-", "").replace("+", ""))
+        volume = _safe_int(raw_volume.replace(",", ""))
+        change_rate = _safe_float(raw_rate.replace("%", ""))
 
         return {
             "code": code,
             "price": price,
             "volume": volume,
             "change_rate": change_rate,
+            "available": raw_price.strip() != "",
         }
 
     # -------------------------------------------------------------------------

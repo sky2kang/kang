@@ -28,8 +28,10 @@ class ConditionAutoTrader:
         self.rules_provider = rules_provider
         self.status_cb = status_cb
         self.running = False
+        self.halted = False         # 당일청산 후 신규 매수 차단
         self.active = []            # [(screen, name, idx)]
         self.code_cond = {}         # code -> idx(str), 매수 근거 조건식
+        self.code_peak = {}         # code -> 보유 후 최고가 (트레일링 스탑용)
         self.watched = set()        # 실시간 시세 등록된 종목
 
     # ------------------------------------------------------------ 시작/중지
@@ -37,6 +39,7 @@ class ConditionAutoTrader:
         """selected: [(idx, name), ...] — 호출 측에서 enabled 만, 최대 10개 전달"""
         if self.running:
             return
+        self.halted = False
         self.kiwoom.condition_real_callback = self._on_condition
         self.kiwoom.register_real_callback(REAL_SCREEN, self._on_real_price)
         self.kiwoom.chejan_callback = self._on_chejan
@@ -70,6 +73,7 @@ class ConditionAutoTrader:
         except Exception:
             pass
         self.watched.clear()
+        self.code_peak.clear()
         self.running = False
         self._notify("stop")
         logger.info("조건 자동매매 중지")
@@ -91,6 +95,8 @@ class ConditionAutoTrader:
                 self._handle_exit(code, reason="이탈")
 
     def _handle_entry(self, code, cond_index):
+        if self.halted:
+            return
         if code in self.trader.positions:
             return
         rule = self.rules_provider().get(str(cond_index), {})
@@ -103,6 +109,7 @@ class ConditionAutoTrader:
         amount = int(rule.get("buy_amount") or 0) or None
         if self.trader.buy(code, name, info["price"], amount=amount):
             self.code_cond[code] = str(cond_index)
+            self.code_peak[code] = info["price"]
             self._register_price(code)
             self._notify("buy", code=code, name=name, price=info["price"], cond=cond_index)
 
@@ -112,7 +119,19 @@ class ConditionAutoTrader:
         name = self.trader.positions[code]["name"]
         if self.trader.sell(code, reason=reason):
             self.code_cond.pop(code, None)
+            self.code_peak.pop(code, None)
             self._notify("sell", code=code, name=name, reason=reason)
+
+    def liquidate_all(self, reason="당일청산"):
+        """보유 종목 전량 매도 + 신규 매수 차단 (당일청산)."""
+        if self.halted:
+            return
+        self.halted = True
+        codes = list(self.trader.positions.keys())
+        for code in codes:
+            self._handle_exit(code, reason=reason)
+        self._notify("liquidate", count=len(codes))
+        logger.info(f"{reason}: {len(codes)}종목 매도, 신규 매수 차단")
 
     # ------------------------------------------------- 실시간 시세→손절/익절
     def _register_price(self, code):
@@ -134,12 +153,26 @@ class ConditionAutoTrader:
         avg = pos.get("avg_price", 0)
         if avg <= 0:
             return
+        # 보유 후 최고가 갱신 (트레일링 스탑 기준)
+        peak = max(self.code_peak.get(code, price), price)
+        self.code_peak[code] = peak
+
         profit = (price - avg) / avg
         stop = rule.get("stop_loss")
         take = rule.get("take_profit")
+        trail = rule.get("trailing_stop") or 0
+
+        # 1) 손절 (하드 플로어)
         if stop is not None and profit <= stop / 100.0:
             self._handle_exit(code, reason=f"손절({profit:.1%})")
-        elif take is not None and profit >= take / 100.0:
+            return
+        # 2) 트레일링 스탑 (수익 구간 진입 후 고점 대비 trail% 하락 시)
+        if trail > 0 and peak > avg and price <= peak * (1 - trail / 100.0):
+            peak_dd = (price - peak) / peak
+            self._handle_exit(code, reason=f"트레일링(고점{peak_dd:.1%}, 수익{profit:+.1%})")
+            return
+        # 3) 익절 (고정 목표)
+        if take is not None and profit >= take / 100.0:
             self._handle_exit(code, reason=f"익절({profit:.1%})")
 
     def _on_chejan(self, data):

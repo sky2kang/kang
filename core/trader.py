@@ -95,6 +95,10 @@ class Trader:
             logger.info(f"[{code}] 이미 보유 중")
             return False
 
+        if current_price <= 0:
+            logger.warning(f"[{code}] 현재가를 확인할 수 없어 매수를 건너뜁니다 (시세 미수신)")
+            return False
+
         budget = amount if amount else self.max_buy_amount
         qty = budget // current_price
         if qty < 1:
