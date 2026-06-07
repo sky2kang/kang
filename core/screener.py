@@ -59,8 +59,8 @@ class StockScreener:
                     logger.debug("no data for %s", code)
                     continue
 
-                info = self._mdata.get_stock_info(code)
-                name = info.get("name", code) if info else code
+                # 종목명은 KiwoomAPI.GetMasterCodeName 으로 조회
+                name = self._get_name(code)
 
                 analyzer = StockAnalyzer(df)
                 analysis = analyzer.analyze()
@@ -98,6 +98,18 @@ class StockScreener:
 
         results.sort(key=lambda x: x["score"], reverse=True)
         return results
+
+    # ------------------------------------------------------------------
+    def _get_name(self, code):
+        """종목명 조회 (KiwoomAPI.GetMasterCodeName 사용 가능 시)"""
+        try:
+            kiwoom = getattr(self._mdata, "api", None)
+            if kiwoom and hasattr(kiwoom, "dynamicCall"):
+                name = kiwoom.dynamicCall("GetMasterCodeName(QString)", code)
+                return name.strip() if name else code
+        except Exception:
+            pass
+        return code
 
     # ------------------------------------------------------------------
     def screen_from_market(self, market="kospi", top_n=50):

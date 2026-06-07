@@ -9,7 +9,17 @@ import os
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.font_manager as fm  # noqa: E402
 import numpy as np  # noqa: E402
+
+# Windows 한글 폰트 (맑은 고딕), Linux fallback
+_KR_FONTS = ["Malgun Gothic", "NanumGothic", "AppleGothic", "DejaVu Sans"]
+_available = {f.name for f in fm.fontManager.ttflist}
+for _fn in _KR_FONTS:
+    if _fn in _available:
+        plt.rcParams["font.family"] = _fn
+        break
+plt.rcParams["axes.unicode_minus"] = False
 
 
 class BacktestChart:

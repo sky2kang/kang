@@ -11,3 +11,6 @@ venv/
 # 로그 및 데이터
 logs/
 data/*.db
+# Claude Code 워크트리 (에이전트 임시 브랜치)
+.claude/worktrees/
+backtest/charts/
