@@ -1283,10 +1283,10 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._start_log_tail()
 
-        # 1초 잔고 갱신 타이머
+        # 잔고 갱신 타이머 (60초 간격, 키움 TR 요청 제한 고려)
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_balance)
-        self._refresh_timer.start(5000)
+        self._refresh_timer.start(60000)
 
         # 스케줄러 체크 타이머
         self._sched_timer = QTimer(self)
@@ -1468,6 +1468,11 @@ class MainWindow(QMainWindow):
 
     # ── 잔고 새로고침 ────────────────────────────────────────────────────────
     def _refresh_balance(self):
+        # 장 시간 외에는 조회 빈도를 더 낮춤 (불필요한 TR 절약)
+        now_h = datetime.datetime.now().hour
+        if now_h < 8 or now_h >= 16:
+            return
+
         # controller 경유 (연결된 경우)
         if self._ctrl:
             try:
