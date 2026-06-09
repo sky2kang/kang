@@ -274,6 +274,36 @@ class _ScreenerThread(QThread):
             self.error.emit(str(e))
 
 
+class _AnalysisThread(QThread):
+    finished = pyqtSignal(dict, str, str)  # analysis, code, name
+    error = pyqtSignal(str)
+
+    def __init__(self, mdata, code, days, parent=None):
+        super().__init__(parent)
+        self._mdata = mdata
+        self._code = code
+        self._days = days
+
+    def run(self):
+        try:
+            import datetime as dt
+            from core.analyzer import StockAnalyzer
+
+            start = (dt.datetime.now() - dt.timedelta(days=self._days)).strftime("%Y%m%d")
+            df = self._mdata.get_daily_ohlcv(self._code, start)
+            name = self._code
+            try:
+                kiwoom = getattr(self._mdata, "api", None)
+                if kiwoom:
+                    name = kiwoom.dynamicCall("GetMasterCodeName(QString)", self._code).strip()
+            except Exception:
+                pass
+            analysis = StockAnalyzer(df).analyze()
+            self.finished.emit(analysis, self._code, name)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class _BacktestThread(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -980,28 +1010,58 @@ class _AnalysisTab(QWidget):
         vbox.addWidget(g2)
 
     def show_analysis(self, analysis: dict, code: str, name: str):
-        rsi = analysis.get("rsi", 0) or 0
+        rsi = analysis.get("rsi") or 0
         score = analysis.get("total_score", 0)
         opinion = analysis.get("opinion", ("중립", "⚪"))
 
+        # RSI 카드
         self._sig_cards["rsi"].setText(f"{rsi:.1f}")
-        self._sig_cards["rsi"].setObjectName(
-            "labelBuy" if rsi < 35 else ("labelSell" if rsi > 70 else "labelSub")
-        )
-        self._sig_cards["score"].setText(f"{score:.2f} {opinion[1]}")
 
-        ma = analysis.get("ma") or {}
-        self._sig_cards["ma"].setText(ma.get("signal", "--"))
+        # 종합점수 카드
+        self._sig_cards["score"].setText(f"{score:.1f} {opinion[1]}")
+
+        # 이동평균 카드: moving_averages 키 사용
+        ma = analysis.get("moving_averages") or {}
+        ma5 = ma.get("ma5")
+        ma20 = ma.get("ma20")
+        if ma5 is not None and ma20 is not None:
+            self._sig_cards["ma"].setText("▲상승" if ma5 > ma20 else "▼하락")
+        else:
+            self._sig_cards["ma"].setText("--")
+
+        # MACD 카드
         macd = analysis.get("macd") or {}
-        self._sig_cards["macd"].setText(macd.get("signal", "--"))
+        if macd:
+            hist = macd.get("histogram", 0)
+            self._sig_cards["macd"].setText(f"{'▲' if hist > 0 else '▼'}{abs(hist):.1f}")
+        else:
+            self._sig_cards["macd"].setText("--")
+
+        # 볼린저밴드 카드
         bb = analysis.get("bollinger") or {}
-        self._sig_cards["bb"].setText(bb.get("signal", "--"))
+        if bb:
+            pct_b = bb.get("pct_b", 0.5)
+            if pct_b < 0.1:
+                self._sig_cards["bb"].setText("▲하단근접")
+            elif pct_b > 0.9:
+                self._sig_cards["bb"].setText("▼상단근접")
+            else:
+                self._sig_cards["bb"].setText(f"중앙 {pct_b:.2f}")
+        else:
+            self._sig_cards["bb"].setText("--")
+
+        # 거래량 카드
         vol = analysis.get("volume") or {}
-        ratio = vol.get("ratio", 0)
+        ratio = vol.get("ratio", 0) if vol else 0
         self._sig_cards["vol"].setText(f"{ratio:.1f}x")
 
+        # 상세 리포트
         from core.analyzer import StockAnalyzer
         self.txt_report.setText(StockAnalyzer.report_text_from(analysis, code, name))
+
+        # 버튼 복원
+        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setText("분석 실행")
 
 
 # ── 좌측 사이드바 ─────────────────────────────────────────────────────────────
@@ -1562,24 +1622,24 @@ class MainWindow(QMainWindow):
         if self._mdata is None:
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 분석 가능합니다.")
             return
-        try:
-            import datetime as dt
-            from core.analyzer import StockAnalyzer
-            days = self.tab_analysis.spin_days.value()
-            start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
-            df = self._mdata.get_daily_ohlcv(code, start)
-            name = code
-            try:
-                kiwoom = getattr(self._mdata, "api", None)
-                if kiwoom:
-                    name = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
-            except Exception:
-                pass
-            analysis = StockAnalyzer(df).analyze()
-            self.tab_analysis.show_analysis(analysis, code, name)
-            self._log(f"분석 완료: {name}({code})", 0)
-        except Exception as e:
-            QMessageBox.critical(self, "분석 오류", str(e))
+        days = self.tab_analysis.spin_days.value()
+        self.tab_analysis.btn_analyze.setEnabled(False)
+        self.tab_analysis.btn_analyze.setText("분석 중...")
+        self._analysis_thread = _AnalysisThread(self._mdata, code, days)
+        self._analysis_thread.finished.connect(self._on_analysis_done)
+        self._analysis_thread.error.connect(self._on_analysis_error)
+        self._analysis_thread.start()
+
+    def _on_analysis_done(self, analysis: dict, code: str, name: str):
+        self.tab_analysis.show_analysis(analysis, code, name)
+        self._log(f"분석 완료: {name}({code})", 0)
+
+    def _on_analysis_error(self, msg: str):
+        self.tab_analysis.btn_analyze.setEnabled(True)
+        self.tab_analysis.btn_analyze.setText("분석 실행")
+        logger.error("분석 오류: %s", msg)
+        self._log(f"분석 오류: {msg}", 0)
+        QMessageBox.critical(self, "분석 오류", msg)
 
     # ── 스케줄 체크 ──────────────────────────────────────────────────────────
     def _check_schedule(self):
