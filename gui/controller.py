@@ -172,6 +172,7 @@ class TradingController:
 
         if self._market_data and self._account:
             try:
+                logger.info("잔고조회 대상 계좌=%s, simul=%s", self._account, self._is_simul)
                 bal = self._market_data.get_account_balance(
                     self._account, is_simul=self._is_simul
                 )

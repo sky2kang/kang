@@ -2099,9 +2099,11 @@ def run_with_kiwoom():
         if not accounts:
             QMessageBox.critical(None, "오류", "계좌 정보를 가져올 수 없습니다.")
             sys.exit(1)
+        logger.info("보유 계좌 목록: %s (ACCOUNT_NUMBER 설정=%r)", accounts, ACCOUNT_NUMBER)
 
         # ACCOUNT_NUMBER 설정 있으면 우선, 없으면 첫 번째 계좌
         account = ACCOUNT_NUMBER if ACCOUNT_NUMBER in accounts else accounts[0]
+        logger.info("선택된 기본 계좌: %s", account)
         user_name = kiwoom.get_login_info("USER_NAME")
         server = kiwoom.get_login_info("GetServerGubun")
         is_simul = IS_SIMUL or (server == "1")  # 1=모의투자 서버
