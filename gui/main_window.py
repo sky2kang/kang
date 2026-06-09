@@ -1488,6 +1488,17 @@ class MainWindow(QMainWindow):
             if now_h < 8 or now_h >= 16:
                 return
 
+        # 콤보박스에 보이는 계좌를 컨트롤러에 강제 동기화 (desync 방지)
+        try:
+            combo = getattr(self.header, "combo_account", None)
+            if self._ctrl and combo is not None:
+                acc = combo.currentText().strip()
+                if acc and acc != getattr(self._ctrl, "_account", None):
+                    self._ctrl._account = acc
+                    self._log(f"조회 계좌 변경: {acc}", 2)
+        except Exception as e:
+            logger.debug("계좌 동기화 실패: %s", e)
+
         # controller 경유 (연결된 경우)
         if self._ctrl:
             try:
