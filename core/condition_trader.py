@@ -114,7 +114,14 @@ class ConditionTrader:
             logger.info(f"[{code}] 이미 보유 중 - 매수 생략")
             return
 
-        info = self.mdata.get_stock_info(code)
+        try:
+            info = self.mdata.get_stock_info(code)
+        except Exception as e:
+            logger.error(f"[{code}] 현재가 조회 실패: {e}")
+            return
+        if not info or not info.get("price"):
+            logger.warning(f"[{code}] 현재가 0 또는 조회 실패 - 매수 생략")
+            return
         name = self._get_stock_name(code)
         logger.info(f"[조건편입:{cond_name}] {name}({code}) 매수시도 "
                     f"현재가={info['price']:,}")

@@ -97,6 +97,8 @@ class MarketDataAPI:
                 break
 
         df = pd.DataFrame(rows)
+        if df.empty:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
         df = df[df["date"] >= start_date].reset_index(drop=True)
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
@@ -123,6 +125,8 @@ class MarketDataAPI:
             })
 
         df = pd.DataFrame(rows)
+        if df.empty:
+            return pd.DataFrame(columns=["datetime", "close", "volume"])
         df["datetime"] = pd.to_datetime(df["datetime"], format="%Y%m%d%H%M%S")
         return df.sort_values("datetime").reset_index(drop=True)
 

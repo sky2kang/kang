@@ -114,9 +114,9 @@ class BacktestEngine:
             "code": code,
             "strategy": self.strategy.name,
             "period": (
-            str(df.iloc[0]["date"] if "date" in df.columns else df.index[0])[:10],
-            str(df.iloc[-1]["date"] if "date" in df.columns else df.index[-1])[:10],
-        ),
+                str(df.iloc[0]["date"] if "date" in df.columns else df.index[0])[:10] if len(df) else "N/A",
+                str(df.iloc[-1]["date"] if "date" in df.columns else df.index[-1])[:10] if len(df) else "N/A",
+            ),
             "initial_cash": self.initial_cash,
             "final_equity": int(final_equity),
             "total_return": round(total_return, 4),

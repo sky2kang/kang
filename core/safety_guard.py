@@ -102,7 +102,7 @@ class SafetyGuard:
             return False, "장 운영 시간이 아닙니다 (평일 09:00~15:30)"
         if self._order_count >= self.max_orders_per_day:
             return False, f"일일 최대 주문 횟수({self.max_orders_per_day}회) 초과"
-        if available_cash < self.min_available_cash:
+        if not isinstance(available_cash, (int, float)) or available_cash < self.min_available_cash:
             return False, f"주문가능금액 부족 ({available_cash:,}원)"
         return True, "OK"
 

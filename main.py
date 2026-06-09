@@ -118,13 +118,13 @@ def run_balance_check():
         kiwoom.set_input_value("비밀번호", pw)
         kiwoom.set_input_value("비밀번호입력매체구분", "00")
         kiwoom.set_input_value("조회구분", "2")
-        ret = kiwoom.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
+        ret = kiwoom.comm_rq_data("예수금상세현황", "opw00001", 0, "2001",
+                                  single_fields=["예수금", "주문가능금액", "출금가능금액", "추정예탁자산"])
         if ret != 0:
             print(f"  TR 요청 실패 ret={ret}")
         else:
-            for field in ("예수금", "주문가능금액", "출금가능금액", "추정예탁자산"):
-                raw = kiwoom.get_comm_data("opw00001", "예수금상세현황", 0, field)
-                print(f"  예수금상세현황 {field}={raw!r}")
+            for field, val in kiwoom.tr_data.get("single", {}).items():
+                print(f"  예수금상세현황 {field}={val!r}")
 
         # --- opw00018 계좌평가잔고내역 (단건 합계) ---
         print(f"[계좌 {acc}] opw00018 계좌평가잔고내역")
@@ -133,16 +133,16 @@ def run_balance_check():
         kiwoom.set_input_value("비밀번호", pw)
         kiwoom.set_input_value("비밀번호입력매체구분", "00")
         kiwoom.set_input_value("조회구분", "2")
-        ret = kiwoom.comm_rq_data("계좌잔고조회", "opw00018", 0, "2000")
+        ret = kiwoom.comm_rq_data("계좌잔고조회", "opw00018", 0, "2000",
+                                  single_fields=["예수금", "총평가금액", "추정예탁자산",
+                                                 "주문가능금액", "총매입금액"],
+                                  multi_fields=["종목명", "보유수량"])
         if ret != 0:
             print(f"  TR 요청 실패 ret={ret}")
         else:
-            for field in ("예수금", "총평가금액", "추정예탁자산", "주문가능금액",
-                          "총매입금액", "d+2추정예수금"):
-                raw = kiwoom.get_comm_data("opw00018", "계좌평가잔고내역", 0, field)
-                print(f"  계좌평가잔고내역 {field}={raw!r}")
-            cnt = kiwoom.get_repeat_cnt("opw00018", "계좌평가잔고내역")
-            print(f"  보유종목 반복건수={cnt}")
+            for field, val in kiwoom.tr_data.get("single", {}).items():
+                print(f"  계좌평가잔고내역 {field}={val!r}")
+            print(f"  보유종목 반복건수={len(kiwoom.tr_data.get('multi', []))}")
     print("\n" + "=" * 60)
     print("0이 아닌 숫자가 보이면 비밀번호/계좌가 맞는 것입니다.")
     print("모두 빈 값이면 KIWOOM_ACCOUNT_PW 가 틀렸거나 계좌비밀번호 미등록입니다.")

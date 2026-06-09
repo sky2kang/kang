@@ -19,6 +19,8 @@ class StockAnalyzer:
     """df 컬럼 요구: date, open, high, low, close, volume"""
 
     def __init__(self, df):
+        if df is None or df.empty:
+            raise ValueError("분석할 데이터가 없습니다 (빈 DataFrame)")
         self.df = df.copy().reset_index(drop=True)
 
     # -------------------------------------------------------------------------
@@ -47,7 +49,7 @@ class StockAnalyzer:
 
     def macd(self, fast=12, slow=26, signal=9):
         close = self.df["close"]
-        if len(close) < slow + signal:
+        if len(close) < slow + signal + 1:
             return None
         ema_fast = close.ewm(span=fast, adjust=False).mean()
         ema_slow = close.ewm(span=slow, adjust=False).mean()

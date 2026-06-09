@@ -54,13 +54,15 @@ class Trader:
         """계좌 잔고로 포지션 초기화"""
         result = self.mdata.get_account_balance(self.account, is_simul=self.is_simul)
         self.positions = {}
-        for _, row in result["holdings"].iterrows():
-            if row["qty"] > 0:
-                self.positions[row["code"]] = {
-                    "name": row["name"],
-                    "qty": row["qty"],
-                    "avg_price": row["avg_price"],
-                }
+        holdings_df = result.get("holdings")
+        if holdings_df is not None and not holdings_df.empty:
+            for _, row in holdings_df.iterrows():
+                if row["qty"] > 0:
+                    self.positions[row["code"]] = {
+                        "name": row["name"],
+                        "qty": row["qty"],
+                        "avg_price": row["avg_price"],
+                    }
         logger.info(f"포지션 동기화: {list(self.positions.keys())}")
         return result["summary"]
 
@@ -190,6 +192,9 @@ class Trader:
                 info = self.mdata.get_stock_info(code)
                 time.sleep(0.4)
                 df = self.mdata.get_daily_ohlcv(code, _days_ago(60))
+                if df.empty:
+                    logger.warning(f"[{code}] 일봉 데이터 없음 - 매도 체크 생략")
+                    continue
                 if self.strategy.should_sell(df, code, pos["avg_price"], info["price"]):
                     profit = (info["price"] - pos["avg_price"]) / pos["avg_price"]
                     self.sell(code, reason=f"전략매도(수익률:{profit:.2%})")
@@ -205,8 +210,14 @@ class Trader:
             try:
                 time.sleep(0.4)  # TR 속도 제한 회피
                 info = self.mdata.get_stock_info(code)
+                if not info.get("price"):
+                    logger.warning(f"[{code}] 현재가 조회 실패 - 매수 생략")
+                    continue
                 time.sleep(0.4)
                 df = self.mdata.get_daily_ohlcv(code, _days_ago(60))
+                if df.empty:
+                    logger.warning(f"[{code}] 일봉 데이터 없음 - 매수 체크 생략")
+                    continue
                 if self.strategy.should_buy(df, code):
                     self.buy(code, name, info["price"])
             except Exception as e:
