@@ -185,8 +185,21 @@ class TradingController:
                 df_h = bal.get("holdings")
                 if df_h is not None and not df_h.empty:
                     holdings = df_h.to_dict("records")
-                # 주의: 모의투자 미신청 계좌는 opw00018/opw00001 모두 빈 값을 반환하며
-                # opw00001 보강 조회는 "(44) 계좌정보 없음" 팝업을 띄우므로 호출하지 않는다.
+
+                # opw00018(계좌잔고)은 보유종목이 없으면 예수금/평가금액을 빈 값으로
+                # 반환한다. 현금만 있는 계좌의 예수금은 opw00001로 보강 조회한다.
+                # (계좌비밀번호 등록이 되어 있어야 정상 동작)
+                try:
+                    dep = self._market_data.get_deposit(self._account)
+                    deposit = int(dep.get("deposit", 0))
+                    avail = int(dep.get("available", 0))
+                    if account_info["total_eval"] == 0 and deposit > 0:
+                        account_info["total_eval"] = deposit
+                    if account_info["available"] == 0 and avail > 0:
+                        account_info["available"] = avail
+                    account_info["deposit"] = deposit
+                except Exception as exc:
+                    logger.warning("get_deposit(opw00001) error: %s", exc)
             except Exception as exc:
                 logger.warning("get_status account error: %s", exc)
 
