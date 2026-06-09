@@ -1,6 +1,7 @@
 """
 매매 실행 모듈 - 주문 생성, 리스크 관리, 포지션 추적
 """
+import time
 import datetime
 from config.settings import (
     MAX_BUY_AMOUNT, MAX_STOCK_COUNT, STOP_LOSS_RATE, TAKE_PROFIT_RATE,
@@ -185,7 +186,9 @@ class Trader:
         # 보유 종목 매도 체크
         for code, pos in list(self.positions.items()):
             try:
+                time.sleep(0.4)  # TR 속도 제한 회피
                 info = self.mdata.get_stock_info(code)
+                time.sleep(0.4)
                 df = self.mdata.get_daily_ohlcv(code, _days_ago(60))
                 if self.strategy.should_sell(df, code, pos["avg_price"], info["price"]):
                     profit = (info["price"] - pos["avg_price"]) / pos["avg_price"]
@@ -200,7 +203,9 @@ class Trader:
             if code in self.positions:
                 continue
             try:
+                time.sleep(0.4)  # TR 속도 제한 회피
                 info = self.mdata.get_stock_info(code)
+                time.sleep(0.4)
                 df = self.mdata.get_daily_ohlcv(code, _days_ago(60))
                 if self.strategy.should_buy(df, code):
                     self.buy(code, name, info["price"])

@@ -90,8 +90,23 @@ class KiwoomAPI(QAxWidget):
     def set_input_value(self, key, value):
         self.dynamicCall("SetInputValue(QString, QString)", key, str(value))
 
-    def comm_rq_data(self, rq_name, tr_code, prev_next, screen_no):
-        """TR 요청 전송 후 응답 대기"""
+    def comm_rq_data(self, rq_name, tr_code, prev_next, screen_no,
+                     single_fields=None, multi_fields=None):
+        """
+        TR 요청 전송 후 응답 대기.
+        키움 OCX는 TR 데이터를 OnReceiveTrData 콜백 동안에만 유효하게 유지하므로,
+        읽을 필드명을 미리 받아 핸들러 안에서 읽어 self.tr_data 에 저장한다.
+
+        single_fields: 단건 데이터 항목명 리스트 (예: ["현재가", "거래량"])
+        multi_fields:  반복 데이터 항목명 리스트 (멀티 레코드)
+        결과는 self.tr_data["single"](dict), self.tr_data["multi"](list[dict]) 에 저장.
+        """
+        self._tr_event = QEventLoop()
+        self._tr_received = False
+        self._tr_single_fields = single_fields or []
+        self._tr_multi_fields = multi_fields or []
+        self.tr_data = {"single": {}, "multi": [], "prev_next": "0",
+                        "rq_name": rq_name, "tr_code": tr_code}
         ret = self.dynamicCall(
             "CommRqData(QString, QString, int, QString)",
             rq_name, tr_code, prev_next, screen_no
@@ -99,16 +114,43 @@ class KiwoomAPI(QAxWidget):
         if ret != 0:
             logger.error(f"TR 요청 실패: {rq_name}, ret={ret}")
             return ret
-        self._tr_event.exec_()
+        if not self._tr_received:   # 동기 응답이 아닌 경우만 대기
+            self._tr_event.exec_()
         return 0
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
                             prev_next, *args):
+<<<<<<< Updated upstream
         logger.info(f"TR 수신: {rq_name} ({tr_code}), record_name={record_name!r}, 다음페이지={prev_next}")
         self.tr_data["prev_next"] = prev_next
         self.tr_data["rq_name"] = rq_name
         self.tr_data["tr_code"] = tr_code
         self.tr_data["record_name"] = record_name
+=======
+        self.tr_data["prev_next"] = prev_next
+
+        # 콜백 내에서 데이터를 읽어 저장 (콜백 종료 후에는 버퍼가 비워짐)
+        for field in self._tr_single_fields:
+            self.tr_data["single"][field] = self.dynamicCall(
+                "GetCommData(QString, QString, int, QString)",
+                tr_code, rq_name, 0, field
+            ).strip()
+
+        if self._tr_multi_fields:
+            cnt = self.dynamicCall("GetRepeatCnt(QString, QString)", tr_code, rq_name)
+            for i in range(cnt):
+                row = {}
+                for field in self._tr_multi_fields:
+                    row[field] = self.dynamicCall(
+                        "GetCommData(QString, QString, int, QString)",
+                        tr_code, rq_name, i, field
+                    ).strip()
+                self.tr_data["multi"].append(row)
+
+        logger.info(f"TR 수신: {rq_name} ({tr_code}), 다음페이지={prev_next}, "
+                    f"단건={len(self.tr_data['single'])}개, 반복={len(self.tr_data['multi'])}건")
+        self._tr_received = True
+>>>>>>> Stashed changes
         self._tr_event.quit()
 
     def get_comm_data(self, tr_code, record_name, index, item_name):
