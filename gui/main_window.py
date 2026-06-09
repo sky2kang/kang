@@ -593,17 +593,30 @@ class _IndividualTab(QWidget):
         g = QGroupBox("선택 종목 상세 설정")
         gg = QGridLayout(g)
 
-        labels = [
-            "목표 수익률(%)", "손절 비율(%)", "1회 투자금(원)",
-            "가격 밴드 상단(원)", "가격 밴드 하단(원)", "트레일링 스탑(%)"
+        # (라벨, 종류) — pct: %값 / won: 원화 정수값
+        fields = [
+            ("목표 수익률(%)", "pct", 3.0),
+            ("손절 비율(%)", "pct", 3.0),
+            ("1회 투자금(원)", "won", 1_000_000),
+            ("가격 밴드 상단(원)", "won", 0),
+            ("가격 밴드 하단(원)", "won", 0),
+            ("트레일링 스탑(%)", "pct", 3.0),
         ]
         self._detail_spins = []
-        for i, lbl in enumerate(labels):
+        for i, (lbl, kind, default) in enumerate(fields):
             gg.addWidget(QLabel(lbl), i // 2, (i % 2) * 2)
-            sp = QDoubleSpinBox()
-            sp.setRange(-30, 100)
-            sp.setValue(3.0)
-            sp.setSuffix(" %")
+            if kind == "won":
+                sp = QSpinBox()
+                sp.setRange(0, 1_000_000_000)
+                sp.setSingleStep(100_000)
+                sp.setValue(int(default))
+                sp.setSuffix(" 원")
+                sp.setGroupSeparatorShown(True)
+            else:
+                sp = QDoubleSpinBox()
+                sp.setRange(-30, 100)
+                sp.setValue(default)
+                sp.setSuffix(" %")
             gg.addWidget(sp, i // 2, (i % 2) * 2 + 1)
             self._detail_spins.append(sp)
 
@@ -1602,7 +1615,10 @@ class MainWindow(QMainWindow):
         self.tab_screening.progress.setVisible(True)
         self.tab_screening.progress.setRange(0, 0)
         self.tab_screening.btn_screen.setEnabled(False)
-        self._log(f"스크리닝 시작: 시장={market}, 상위 {top_n}종목", 0)
+        if codes:
+            self._log(f"스크리닝 시작: 직접입력 {len(codes)}종목 ({','.join(codes)})", 0)
+        else:
+            self._log(f"스크리닝 시작: 시장={market}, 상위 {top_n}종목", 0)
         QApplication.processEvents()
         try:
             # 키움 OCX TR은 메인 스레드에서만 응답 수신
@@ -1621,7 +1637,13 @@ class MainWindow(QMainWindow):
 
     def _on_screen_done(self, results):
         self.tab_screening.show_results(results)
-        self._log(f"스크리닝 완료: {len(results)}종목 선별", 0)
+        if results:
+            self._log(f"스크리닝 완료: {len(results)}종목 선별", 0)
+        else:
+            self._log(
+                "스크리닝 완료: 조건 통과 0종목 "
+                "(최소점수/거래량배율/RSI상한 필터를 완화해 보세요)", 0
+            )
 
     def _export_screening(self):
         path, _ = QFileDialog.getSaveFileName(
