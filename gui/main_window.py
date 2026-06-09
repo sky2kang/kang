@@ -1544,19 +1544,36 @@ class MainWindow(QMainWindow):
         if self._mdata is None:
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 백테스트 가능합니다.")
             return
-        self._bt_thread = _BacktestThread(
-            self._mdata, code, strat_name, days, cash, self
-        )
-        self._bt_thread.finished.connect(self._on_bt_done)
-        self._bt_thread.error.connect(lambda e: QMessageBox.critical(self, "오류", e))
-        self._bt_thread.start()
+        if not code:
+            QMessageBox.warning(self, "안내", "종목코드를 입력하세요.")
+            return
         self.tab_backtest.btn_run_bt.setEnabled(False)
+        self.tab_backtest.btn_run_bt.setText("실행 중...")
         self._log(f"백테스트 시작: {code} / {strat_name} / {days}일", 0)
+        QApplication.processEvents()
+        try:
+            import datetime as dt
+            from backtest.engine import BacktestEngine
+            from strategy.ma_strategy import MAStrategy
+            from strategy.rsi_strategy import RSIStrategy
+            start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
+            # 키움 OCX는 메인 스레드에서만 TR 응답 수신
+            df = self._mdata.get_daily_ohlcv(code, start)
+            strat = MAStrategy() if strat_name.startswith("MA") else RSIStrategy()
+            engine = BacktestEngine(strat, initial_cash=cash)
+            result = engine.run(df, code)
+            self._on_bt_done(result)
+        except Exception as e:
+            logger.error("백테스트 오류: %s", e)
+            self._log(f"백테스트 오류: {e}", 0)
+            QMessageBox.critical(self, "오류", str(e))
+        finally:
+            self.tab_backtest.btn_run_bt.setEnabled(True)
+            self.tab_backtest.btn_run_bt.setText("백테스트 실행")
 
     def _on_bt_done(self, result):
         self._bt_result = result
         self.tab_backtest.show_result(result)
-        self.tab_backtest.btn_run_bt.setEnabled(True)
         self._log(
             f"백테스트 완료: {result.get('strategy')} 수익률 {result.get('total_return',0):+.2%}", 0
         )
@@ -1584,15 +1601,23 @@ class MainWindow(QMainWindow):
 
         self.tab_screening.progress.setVisible(True)
         self.tab_screening.progress.setRange(0, 0)
-        self._sc_thread = _ScreenerThread(screener, codes, market, top_n, self)
-        self._sc_thread.finished.connect(self._on_screen_done)
-        self._sc_thread.error.connect(
-            lambda e: (
-                self.tab_screening.progress.setVisible(False),
-                QMessageBox.critical(self, "오류", e)
-            )
-        )
-        self._sc_thread.start()
+        self.tab_screening.btn_screen.setEnabled(False)
+        self._log(f"스크리닝 시작: 시장={market}, 상위 {top_n}종목", 0)
+        QApplication.processEvents()
+        try:
+            # 키움 OCX TR은 메인 스레드에서만 응답 수신
+            if codes:
+                results = screener.screen(codes)
+            else:
+                results = screener.screen_from_market(market, top_n)
+            self._on_screen_done(results)
+        except Exception as e:
+            logger.error("스크리닝 오류: %s", e)
+            self._log(f"스크리닝 오류: {e}", 0)
+            QMessageBox.critical(self, "오류", str(e))
+        finally:
+            self.tab_screening.progress.setVisible(False)
+            self.tab_screening.btn_screen.setEnabled(True)
 
     def _on_screen_done(self, results):
         self.tab_screening.show_results(results)
@@ -1742,16 +1767,17 @@ class MainWindow(QMainWindow):
                 s = json.load(f)
             ct = self.tab_condition
             sl = self.tab_stoploss
-            ct.spin_amount.setValue(s.get("amount", 1_000_000))
-            ct.spin_ratio.setValue(s.get("ratio", 5))
-            ct.spin_max_stocks.setValue(s.get("max_stocks", 5))
+            # _collect_settings() 저장 형식과 동일한 키 사용 (소수 → % 환산)
+            ct.spin_amount.setValue(s.get("buy_amount", 1_000_000))
+            ct.spin_ratio.setValue(s.get("amount_ratio", 5))
+            ct.spin_max_stocks.setValue(s.get("stock_count", 5))
             ct.spin_reenter.setValue(s.get("reenter_min", 20))
-            sl.spin_tp.setValue(s.get("take_profit", 3.0))
-            sl.spin_sl.setValue(s.get("stop_loss", 2.0))
+            sl.spin_tp.setValue(s.get("take_profit", 0.03) * 100.0)
+            sl.spin_sl.setValue(s.get("stop_loss", 0.02) * 100.0)
             sl.chk_trailing.setChecked(s.get("trailing", False))
-            sl.spin_trail_start.setValue(s.get("trail_start", 4.0))
-            sl.spin_trail_drop.setValue(s.get("trail_drop", 1.5))
-            sl.spin_daily_loss.setValue(s.get("daily_loss_limit", 3.0))
+            sl.spin_trail_start.setValue(s.get("trail_start", 0.04) * 100.0)
+            sl.spin_trail_drop.setValue(s.get("trail_drop", 0.015) * 100.0)
+            sl.spin_daily_loss.setValue(s.get("daily_loss_limit", 0.03) * 100.0)
             sl.spin_max_orders.setValue(s.get("max_orders", 30))
             self.statusBar().showMessage("설정 불러오기 완료", 3000)
         except Exception as e:
