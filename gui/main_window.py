@@ -800,7 +800,7 @@ class _BacktestTab(QWidget):
     def show_result(self, result: dict):
         ret = result.get("total_return", 0)
         mdd = result.get("mdd", 0)
-        trades = result.get("total_trades", 0)
+        trades = result.get("trade_count", result.get("total_trades", 0))
         wr = result.get("win_rate", 0)
 
         self._bt_cards["ret"].setText(f"{ret:+.2%}")
