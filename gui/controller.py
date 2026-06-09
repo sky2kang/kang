@@ -185,6 +185,18 @@ class TradingController:
                 df_h = bal.get("holdings")
                 if df_h is not None and not df_h.empty:
                     holdings = df_h.to_dict("records")
+
+                # 보유종목이 없어 예수금/평가금액이 0이면 opw00001로 보강
+                if account_info["available"] == 0 and account_info["total_eval"] == 0:
+                    try:
+                        dep = self._market_data.get_deposit(self._account)
+                        account_info["available"] = dep.get("available", 0)
+                        # 평가금액 미수신 시 예수금으로 대체 표시
+                        if account_info["total_eval"] == 0:
+                            account_info["total_eval"] = dep.get("deposit", 0)
+                        logger.info("예수금 보강조회: %s", dep)
+                    except Exception as de:
+                        logger.warning("예수금 보강조회 실패: %s", de)
             except Exception as exc:
                 logger.warning("get_status account error: %s", exc)
 

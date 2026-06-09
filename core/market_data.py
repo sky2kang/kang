@@ -114,6 +114,36 @@ class MarketDataAPI:
         return df.sort_values("datetime").reset_index(drop=True)
 
     # -------------------------------------------------------------------------
+    # 예수금 상세 조회 (opw00001) - 보유종목이 없어도 예수금/주문가능금액 반환
+    # -------------------------------------------------------------------------
+    def get_deposit(self, account, password="0000"):
+        """
+        예수금상세현황요청. 보유종목 유무와 무관하게 예수금/주문가능금액 반환.
+        반환: {deposit: int, available: int}
+        """
+        self.api.set_input_value("계좌번호", account)
+        self.api.set_input_value("비밀번호", password)
+        self.api.set_input_value("비밀번호입력매체구분", "00")
+        self.api.set_input_value("조회구분", "2")
+        self.api.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
+
+        deposit = self.api.get_comm_data("opw00001", "예수금상세현황", 0, "예수금").replace(",", "")
+        available = self.api.get_comm_data(
+            "opw00001", "예수금상세현황", 0, "출금가능금액").replace(",", "")
+        ordable = self.api.get_comm_data(
+            "opw00001", "예수금상세현황", 0, "주문가능금액").replace(",", "")
+
+        def _to_int(s):
+            s = (s or "").lstrip("0") or "0"
+            try:
+                return int(s)
+            except ValueError:
+                return 0
+
+        avail_val = _to_int(ordable) or _to_int(available)
+        return {"deposit": _to_int(deposit), "available": avail_val}
+
+    # -------------------------------------------------------------------------
     # 계좌 잔고 조회 (opw00018)
     # -------------------------------------------------------------------------
     def get_account_balance(self, account, password="0000", is_simul=True):
