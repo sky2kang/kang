@@ -63,7 +63,9 @@ def parse_args():
     parser.add_argument("--analyze", default="",
                         help="개별 종목 상세 분석 후 종료 (종목코드, 예: 005930)")
     parser.add_argument("--gui", action="store_true",
-                        help="GUI 대시보드 실행")
+                        help="HTS GUI 실행 (키움 실제 연동)")
+    parser.add_argument("--demo", action="store_true",
+                        help="HTS GUI 데모 모드 (키움 연결 없이 화면만)")
     return parser.parse_args()
 
 
@@ -88,11 +90,18 @@ def main():
         run_analyze(args.analyze)
         return
 
-    # GUI 대시보드 모드
-    if args.gui:
-        from gui.main_window import MainWindow, run_standalone
-        logger.info("HTS GUI를 실행합니다.")
+    # 데모 모드 (키움 연결 없이 화면만)
+    if args.demo:
+        from gui.main_window import run_standalone
+        logger.info("HTS GUI 데모 모드를 실행합니다.")
         run_standalone()
+        return
+
+    # GUI 실제 연동 모드
+    if args.gui:
+        from gui.main_window import run_with_kiwoom
+        logger.info("HTS GUI를 실행합니다.")
+        run_with_kiwoom()
         return
 
     is_simul = args.simul == "true"

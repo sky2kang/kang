@@ -1876,5 +1876,148 @@ def run_standalone():
     sys.exit(app.exec_())
 
 
+def run_with_kiwoom():
+    """
+    키움증권 실제 연동 모드로 GUI를 실행한다.
+
+    순서:
+      1. QApplication 생성
+      2. 로그인 스플래시 표시
+      3. KiwoomAPI 초기화 → 키움 로그인 팝업 → 완료 대기
+      4. 계좌 목록 조회
+      5. TradingController 에 로그인 세션 주입
+      6. MainWindow 생성 → 잔고·조건식 초기 로드
+      7. 이벤트 루프 진입
+    """
+    from config.settings import IS_SIMUL, ACCOUNT_NUMBER
+
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    # ── 스플래시 창 ──────────────────────────────────────────────────────
+    splash = QWidget(None, Qt.SplashScreen | Qt.FramelessWindowHint)
+    splash.setFixedSize(400, 120)
+    splash.setStyleSheet(f"background:{C_PANEL}; border:2px solid {C_ACCENT}; border-radius:8px;")
+    sv = QVBoxLayout(splash)
+    sv.setContentsMargins(20, 20, 20, 20)
+    title_lbl = QLabel("⚡ AutoTrader")
+    title_lbl.setAlignment(Qt.AlignCenter)
+    f = title_lbl.font(); f.setPointSize(18); f.setBold(True); title_lbl.setFont(f)
+    title_lbl.setStyleSheet(f"color:{C_ACCENT};")
+    sv.addWidget(title_lbl)
+    status_lbl = QLabel("키움증권 로그인 창을 확인하세요...")
+    status_lbl.setAlignment(Qt.AlignCenter)
+    status_lbl.setStyleSheet(f"color:{C_TEXT};")
+    sv.addWidget(status_lbl)
+    prog = QProgressBar()
+    prog.setRange(0, 0)
+    prog.setStyleSheet(f"QProgressBar::chunk{{background:{C_ACCENT};}}")
+    sv.addWidget(prog)
+    # 화면 중앙 배치
+    screen = app.primaryScreen().geometry()
+    splash.move(
+        (screen.width() - splash.width()) // 2,
+        (screen.height() - splash.height()) // 2,
+    )
+    splash.show()
+    app.processEvents()
+
+    # ── 키움 API 초기화 및 로그인 ────────────────────────────────────────
+    try:
+        from core.kiwoom import KiwoomAPI
+        from core.market_data import MarketDataAPI
+        from gui.controller import TradingController
+
+        status_lbl.setText("KiwoomAPI 초기화 중...")
+        app.processEvents()
+
+        kiwoom = KiwoomAPI()
+
+        status_lbl.setText("로그인 중... (키움 로그인 창 확인)")
+        app.processEvents()
+
+        kiwoom.login()   # 키움 로그인 팝업 → 완료까지 블로킹
+
+        status_lbl.setText("계좌 정보 조회 중...")
+        app.processEvents()
+
+        accounts = kiwoom.get_account_list()
+        if not accounts:
+            QMessageBox.critical(None, "오류", "계좌 정보를 가져올 수 없습니다.")
+            sys.exit(1)
+
+        # ACCOUNT_NUMBER 설정 있으면 우선, 없으면 첫 번째 계좌
+        account = ACCOUNT_NUMBER if ACCOUNT_NUMBER in accounts else accounts[0]
+        user_name = kiwoom.get_login_info("USER_NAME")
+        server = kiwoom.get_login_info("GetServerGubun")
+        is_simul = IS_SIMUL or (server == "1")  # 1=모의투자 서버
+
+        status_lbl.setText(f"{user_name}님 로그인 완료. 잔고 조회 중...")
+        app.processEvents()
+
+        mdata = MarketDataAPI(kiwoom)
+        ctrl = TradingController()
+        ctrl.inject_kiwoom(kiwoom, mdata, account, is_simul)
+
+        # ── 메인 윈도우 생성 ──────────────────────────────────────────────
+        status_lbl.setText("화면 초기화 중...")
+        app.processEvents()
+
+        win = MainWindow(controller=ctrl, market_data_api=mdata)
+
+        # 계좌 목록 헤더에 표시
+        win.header.combo_account.clear()
+        for acc in accounts:
+            win.header.combo_account.addItem(acc)
+        idx = accounts.index(account)
+        win.header.combo_account.setCurrentIndex(idx)
+        win.header.set_api_connected(True)
+        win.header.lbl_simul.setText("[모의]" if is_simul else "[실거래]")
+
+        # 계좌 전환 시 controller에 반영
+        def _on_account_changed(i):
+            if 0 <= i < len(accounts):
+                ctrl._account = accounts[i]
+                win._refresh_balance()
+        win.header.combo_account.currentIndexChanged.connect(_on_account_changed)
+
+        # 조건식 로드
+        status_lbl.setText("조건검색식 로드 중...")
+        app.processEvents()
+        try:
+            cond_map = kiwoom.load_condition_list()   # {idx: name}
+            cond_names = list(cond_map.values())
+            win.tab_condition.set_conditions(cond_names)
+            win.sidebar.cond_active_list.clear()
+            for name in cond_names:
+                win.sidebar.cond_active_list.addItem(name)
+            win._log(f"조건검색식 {len(cond_names)}개 로드 완료", 2)
+        except Exception as e:
+            win._log(f"조건검색식 로드 실패: {e}", 2)
+
+        # 초기 잔고 조회
+        win._refresh_balance()
+
+        # 상태바 갱신
+        mode_txt = "모의투자" if is_simul else "실거래"
+        win.status_mode.setText(f"모드: {mode_txt}")
+        win.status_api.setText(f"API: {user_name} 연결됨")
+
+        splash.close()
+        win.show()
+
+    except Exception as e:
+        splash.close()
+        QMessageBox.critical(
+            None, "연결 오류",
+            f"키움 API 연결 실패:\n{e}\n\n"
+            "키움증권 OpenAPI+가 설치되어 있고\n"
+            "32비트 Python을 사용하는지 확인하세요."
+        )
+        sys.exit(1)
+
+    sys.exit(app.exec_())
+
+
 if __name__ == "__main__":
     run_standalone()

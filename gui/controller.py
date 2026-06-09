@@ -65,6 +65,20 @@ class TradingController:
         self._schedule_thread = None
         self._account = ACCOUNT_NUMBER
         self._is_simul = IS_SIMUL
+        self._pre_injected = False   # 이미 로그인된 kiwoom 주입 여부
+
+    # ------------------------------------------------------------------
+    def inject_kiwoom(self, kiwoom, market_data, account: str, is_simul: bool):
+        """
+        이미 로그인된 KiwoomAPI 인스턴스를 주입한다.
+        이후 start() 호출 시 재로그인 없이 해당 세션을 재사용한다.
+        """
+        self._kiwoom = kiwoom
+        self._market_data = market_data
+        self._account = account
+        self._is_simul = is_simul
+        self._pre_injected = True
+        logger.info("KiwoomAPI 주입 완료: account=%s, simul=%s", account, is_simul)
 
     # ------------------------------------------------------------------
     def start(self, settings: dict):
@@ -73,14 +87,18 @@ class TradingController:
                        strategy, condition_name (조건검색식일 때)
         """
         try:
-            self._kiwoom = KiwoomAPI()
-            self._kiwoom.login()
-
-            accounts = self._kiwoom.get_account_list()
-            if accounts:
-                self._account = accounts[0]
-
-            self._market_data = MarketDataAPI(self._kiwoom)
+            # 이미 로그인된 kiwoom 이 inject 된 경우 재로그인 생략
+            if not self._pre_injected:
+                self._kiwoom = KiwoomAPI()
+                self._kiwoom.login()
+                accounts = self._kiwoom.get_account_list()
+                if accounts:
+                    self._account = accounts[0]
+                self._market_data = MarketDataAPI(self._kiwoom)
+            else:
+                # inject 후 다른 계좌 선택 시 반영
+                if settings.get("account"):
+                    self._account = settings["account"]
             self._safety_guard = SafetyGuard()
             self._notifier = Notifier()
 
