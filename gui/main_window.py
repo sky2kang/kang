@@ -918,198 +918,406 @@ class _SchedulerTab(QWidget):
 
 
 # ── 탭 6 : 백테스트 ───────────────────────────────────────────────────────────
+# 전략 메타정보: 표시명 → {params 기본값, 매수/매도 설명}
+_STRATEGY_META = {
+    "MA 골든크로스": {
+        "class": "MAStrategy",
+        "params": [
+            ("short_period", "단기 MA 기간(일)", 5,  2,  60, 1),
+            ("long_period",  "장기 MA 기간(일)", 20, 5, 200, 5),
+        ],
+        "buy_logic":  (
+            "매수 조건  ▶  단기 이동평균선이 장기 이동평균선을\n"
+            "           아래에서 위로 돌파할 때  →  골든크로스(↑)"
+        ),
+        "sell_logic": (
+            "매도 조건  ▶  ① 손절: 수익률 < 설정 손절%\n"
+            "           ② 익절: 수익률 > 설정 익절%\n"
+            "           ③ 데드크로스: 단기MA가 장기MA 아래로 이탈(↓)"
+        ),
+        "color": "#58a6ff",
+    },
+    "RSI 전략": {
+        "class": "RSIStrategy",
+        "params": [
+            ("period",      "RSI 계산 기간(일)", 14,  5,  60, 1),
+            ("oversold",    "과매도 기준값",     30,  10, 49, 1),
+            ("overbought",  "과매수 기준값",     70,  51, 90, 1),
+        ],
+        "buy_logic":  (
+            "매수 조건  ▶  RSI 가 과매도 기준(기본 30) 아래에서\n"
+            "           다시 그 기준 위로 회복할 때  →  반등 매수(↑)"
+        ),
+        "sell_logic": (
+            "매도 조건  ▶  ① 손절: 수익률 < 설정 손절%\n"
+            "           ② 익절: 수익률 > 설정 익절%\n"
+            "           ③ RSI 가 과매수 기준(기본 70) 이상 도달(↓)"
+        ),
+        "color": "#d2a8ff",
+    },
+}
+
+
 class _BacktestTab(QWidget):
-    # 단일종목: (code, strat, days, cash, "single", "")
-    # 조건식:   ("",   strat, days, cash, "condition", cond_name)
-    run_requested = pyqtSignal(str, str, int, int, str, str)
+    # payload: dict with all settings
+    run_requested = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._chart_widget = None   # BacktestChartWidget (lazy init)
+        self._chart_widget = None
         self._last_result = None
         self._build()
 
+    # ── UI 빌드 ──────────────────────────────────────────────────────────────
     def _build(self):
-        vbox = QVBoxLayout(self)
-        vbox.setSpacing(6)
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
 
-        # ── 설정 GroupBox ───────────────────────────────────────────────────
-        g1 = QGroupBox("백테스트 설정")
-        g1g = QGridLayout(g1)
-        g1g.setVerticalSpacing(6)
+        # ── 상단: 설정 + 전략 파라미터 (좌우 분할) ─────────────────────────
+        top_splitter = QSplitter(Qt.Horizontal)
+        top_splitter.setChildrenCollapsible(False)
+
+        # ─ 좌측: 기본 설정 ──────────────────────────────────────────────────
+        left_box = QGroupBox("백테스트 기본 설정")
+        lg = QGridLayout(left_box)
+        lg.setVerticalSpacing(7)
 
         # 모드 선택
-        g1g.addWidget(QLabel("모드:"), 0, 0)
-        mode_row = QHBoxLayout()
+        lg.addWidget(QLabel("실행 모드:"), 0, 0)
+        mode_w = QWidget()
+        mode_h = QHBoxLayout(mode_w); mode_h.setContentsMargins(0,0,0,0)
         self._bg_mode = QButtonGroup(self)
-        self.rb_single = QRadioButton("단일종목")
-        self.rb_cond   = QRadioButton("조건식")
+        self.rb_single = QRadioButton("단일 종목")
+        self.rb_cond   = QRadioButton("조건식 종목군")
         self.rb_single.setChecked(True)
         self._bg_mode.addButton(self.rb_single, 0)
         self._bg_mode.addButton(self.rb_cond,   1)
-        mode_row.addWidget(self.rb_single)
-        mode_row.addWidget(self.rb_cond)
-        mode_row.addStretch()
-        g1g.addLayout(mode_row, 0, 1, 1, 3)
+        mode_h.addWidget(self.rb_single); mode_h.addWidget(self.rb_cond)
+        mode_h.addStretch()
+        lg.addWidget(mode_w, 0, 1, 1, 3)
 
-        # 단일종목 행
+        # 단일종목 코드
         self.lbl_code = QLabel("종목코드:")
-        g1g.addWidget(self.lbl_code, 1, 0)
+        lg.addWidget(self.lbl_code, 1, 0)
         self.edit_bt_code = QLineEdit("005930")
         self.edit_bt_code.setMaximumWidth(100)
         self.edit_bt_code.setPlaceholderText("예) 005930")
-        g1g.addWidget(self.edit_bt_code, 1, 1)
+        lg.addWidget(self.edit_bt_code, 1, 1)
+        self.lbl_code_hint = QLabel("삼성전자=005930  카카오=035720")
+        self.lbl_code_hint.setStyleSheet("color:#8b949e; font-size:9px;")
+        lg.addWidget(self.lbl_code_hint, 1, 2, 1, 2)
 
-        # 조건식 행
-        self.lbl_cond = QLabel("조건식:")
-        g1g.addWidget(self.lbl_cond, 2, 0)
+        # 조건식 선택
+        self.lbl_cond = QLabel("조건식 선택:")
+        lg.addWidget(self.lbl_cond, 2, 0)
         self.combo_bt_cond = QComboBox()
         self.combo_bt_cond.setMinimumWidth(160)
-        g1g.addWidget(self.combo_bt_cond, 2, 1, 1, 2)
-        self.lbl_cond_stocks = QLabel("(조건식 로드 후 사용)")
+        lg.addWidget(self.combo_bt_cond, 2, 1, 1, 2)
+        self.lbl_cond_stocks = QLabel("(조건식 탭에서 로드)")
         self.lbl_cond_stocks.setStyleSheet("color:#8b949e; font-size:10px;")
-        g1g.addWidget(self.lbl_cond_stocks, 2, 3)
+        lg.addWidget(self.lbl_cond_stocks, 2, 3)
 
-        # 전략
-        g1g.addWidget(QLabel("전략:"), 1, 2)
-        self.combo_strat = QComboBox()
-        self.combo_strat.addItems(["MA 골든크로스", "RSI 전략"])
-        g1g.addWidget(self.combo_strat, 1, 3)
-
-        # 기간 / 초기자금
-        g1g.addWidget(QLabel("기간(일):"), 3, 0)
+        # 백테스트 기간
+        lg.addWidget(QLabel("백테스트 기간:"), 3, 0)
+        period_w = QWidget()
+        period_h = QHBoxLayout(period_w); period_h.setContentsMargins(0,0,0,0)
         self.spin_bt_days = QSpinBox()
         self.spin_bt_days.setRange(60, 1825); self.spin_bt_days.setValue(365)
-        g1g.addWidget(self.spin_bt_days, 3, 1)
+        self.spin_bt_days.setSuffix("일")
+        period_h.addWidget(self.spin_bt_days)
+        self.lbl_period_hint = QLabel("(60~1825일, 약 3개월~5년)")
+        self.lbl_period_hint.setStyleSheet("color:#8b949e; font-size:9px;")
+        period_h.addWidget(self.lbl_period_hint); period_h.addStretch()
+        lg.addWidget(period_w, 3, 1, 1, 3)
 
-        g1g.addWidget(QLabel("초기자금(원):"), 3, 2)
+        # 초기 자금
+        lg.addWidget(QLabel("초기 자금:"), 4, 0)
+        cash_w = QWidget()
+        cash_h = QHBoxLayout(cash_w); cash_h.setContentsMargins(0,0,0,0)
         self.spin_bt_cash = QSpinBox()
         self.spin_bt_cash.setRange(1_000_000, 1_000_000_000)
         self.spin_bt_cash.setSingleStep(1_000_000)
         self.spin_bt_cash.setValue(10_000_000)
-        g1g.addWidget(self.spin_bt_cash, 3, 3)
+        self.spin_bt_cash.setSuffix(" 원")
+        self.spin_bt_cash.setGroupSeparatorShown(True)
+        cash_h.addWidget(self.spin_bt_cash); cash_h.addStretch()
+        lg.addWidget(cash_w, 4, 1, 1, 3)
 
-        self.btn_run_bt = QPushButton("▶  백테스트 실행")
+        # 1회 매수 금액
+        lg.addWidget(QLabel("1회 매수금액:"), 5, 0)
+        buy_w = QWidget()
+        buy_h = QHBoxLayout(buy_w); buy_h.setContentsMargins(0,0,0,0)
+        self.spin_bt_buy = QSpinBox()
+        self.spin_bt_buy.setRange(100_000, 100_000_000)
+        self.spin_bt_buy.setSingleStep(100_000)
+        self.spin_bt_buy.setValue(1_000_000)
+        self.spin_bt_buy.setSuffix(" 원")
+        self.spin_bt_buy.setGroupSeparatorShown(True)
+        buy_h.addWidget(self.spin_bt_buy); buy_h.addStretch()
+        lg.addWidget(buy_w, 5, 1, 1, 3)
+
+        # 실행 버튼
+        self.btn_run_bt = QPushButton("▶   백테스트 실행")
         self.btn_run_bt.setObjectName("btnBuy")
-        g1g.addWidget(self.btn_run_bt, 4, 0, 1, 4)
-        vbox.addWidget(g1)
+        self.btn_run_bt.setMinimumHeight(36)
+        lg.addWidget(self.btn_run_bt, 6, 0, 1, 4)
+        top_splitter.addWidget(left_box)
 
-        # ── 결과 요약 카드 ──────────────────────────────────────────────────
+        # ─ 우측: 전략 선택 + 파라미터 + 설명 ──────────────────────────────
+        right_box = QGroupBox("전략 설정 및 매매 로직")
+        rv = QVBoxLayout(right_box)
+        rv.setSpacing(8)
+
+        # 전략 선택 콤보
+        strat_row = QHBoxLayout()
+        strat_row.addWidget(QLabel("전략 선택:"))
+        self.combo_strat = QComboBox()
+        self.combo_strat.addItems(list(_STRATEGY_META.keys()))
+        self.combo_strat.setMinimumWidth(160)
+        strat_row.addWidget(self.combo_strat); strat_row.addStretch()
+        rv.addLayout(strat_row)
+
+        # 전략 파라미터 그룹
+        self._param_box = QGroupBox("전략 파라미터")
+        self._param_grid = QGridLayout(self._param_box)
+        self._param_grid.setVerticalSpacing(5)
+        rv.addWidget(self._param_box)
+
+        # 손절 / 익절 공통 파라미터
+        common_box = QGroupBox("공통 손절 / 익절")
+        cg = QGridLayout(common_box)
+        cg.addWidget(QLabel("손절 기준(%):"), 0, 0)
+        self.spin_sl = QDoubleSpinBox()
+        self.spin_sl.setRange(-50.0, -0.1); self.spin_sl.setSingleStep(0.5)
+        self.spin_sl.setValue(-5.0); self.spin_sl.setSuffix(" %")
+        cg.addWidget(self.spin_sl, 0, 1)
+        self.lbl_sl_hint = QLabel("손실이 이 값 이하면 강제 매도")
+        self.lbl_sl_hint.setStyleSheet("color:#8b949e; font-size:9px;")
+        cg.addWidget(self.lbl_sl_hint, 0, 2)
+
+        cg.addWidget(QLabel("익절 기준(%):"), 1, 0)
+        self.spin_tp = QDoubleSpinBox()
+        self.spin_tp.setRange(0.1, 200.0); self.spin_tp.setSingleStep(0.5)
+        self.spin_tp.setValue(10.0); self.spin_tp.setSuffix(" %")
+        cg.addWidget(self.spin_tp, 1, 1)
+        self.lbl_tp_hint = QLabel("수익이 이 값 이상이면 강제 매도")
+        self.lbl_tp_hint.setStyleSheet("color:#8b949e; font-size:9px;")
+        cg.addWidget(self.lbl_tp_hint, 1, 2)
+        rv.addWidget(common_box)
+
+        # 전략 로직 설명 텍스트
+        self.txt_logic = QTextEdit()
+        self.txt_logic.setReadOnly(True)
+        self.txt_logic.setMaximumHeight(110)
+        self.txt_logic.setFont(QFont("Consolas", 10))
+        self.txt_logic.setStyleSheet(
+            "background:#1c2128; color:#e6edf3; border:1px solid #30363d;"
+            "border-radius:4px; padding:4px;"
+        )
+        rv.addWidget(self.txt_logic)
+        top_splitter.addWidget(right_box)
+
+        top_splitter.setSizes([400, 500])
+        root.addWidget(top_splitter)
+
+        # ── 결과 요약 카드 행 ──────────────────────────────────────────────
         card_row = QHBoxLayout()
         self._bt_cards = {}
         for key, title in [
-            ("ret", "총 수익률"), ("mdd", "최대 낙폭"),
-            ("trades", "총 매매 횟수"), ("wr", "승률")
+            ("ret", "총 수익률"), ("mdd", "최대 낙폭(MDD)"),
+            ("trades", "총 매매 횟수"), ("wr", "승률"),
         ]:
             g = QGroupBox(title)
-            gv = QVBoxLayout(g)
+            gv = QVBoxLayout(g); gv.setContentsMargins(4, 4, 4, 4)
             lb = QLabel("--")
             lb.setAlignment(Qt.AlignCenter)
             f = lb.font(); f.setPointSize(14); f.setBold(True); lb.setFont(f)
             gv.addWidget(lb)
             card_row.addWidget(g)
             self._bt_cards[key] = lb
-        vbox.addLayout(card_row)
+        root.addLayout(card_row)
 
-        # ── 하단 스플리터 (차트 | 결과) ────────────────────────────────────
-        splitter = QSplitter(Qt.Vertical)
+        # ── 하단 스플리터 (차트 위 / 결과 탭 아래) ─────────────────────────
+        self._main_splitter = QSplitter(Qt.Vertical)
 
-        # 차트 영역 (placeholder – 실제 위젯은 show_result 시 lazy init)
-        self._chart_placeholder = QLabel("백테스트를 실행하면 차트가 여기에 표시됩니다")
+        self._chart_placeholder = QLabel(
+            "백테스트를 실행하면 여기에 주가 차트와 수익 곡선이 표시됩니다\n"
+            "  ▲ 초록 삼각형 = 매수 시점   ▽ 빨간 삼각형 = 매도 시점"
+        )
         self._chart_placeholder.setAlignment(Qt.AlignCenter)
         self._chart_placeholder.setStyleSheet(
             "color:#8b949e; background:#161b22; border:1px solid #30363d;"
+            "border-radius:4px;"
         )
         self._chart_placeholder.setMinimumHeight(300)
-        splitter.addWidget(self._chart_placeholder)
+        self._main_splitter.addWidget(self._chart_placeholder)
 
-        # 결과 탭
         result_tabs = QTabWidget()
-        result_tabs.setMaximumHeight(200)
+        result_tabs.setMaximumHeight(210)
 
-        # 텍스트 요약
         self.txt_bt_result = QTextEdit()
         self.txt_bt_result.setReadOnly(True)
         self.txt_bt_result.setFont(QFont("Consolas", 9))
         result_tabs.addTab(self.txt_bt_result, "결과 요약")
 
-        # 매매 내역 테이블
         self.tbl_trades = _make_table(
             ["종목", "매수일", "매도일", "매수가", "매도가", "수량", "손익", "수익률"],
             stretch_col=1
         )
         result_tabs.addTab(self.tbl_trades, "매매 내역")
 
-        # 조건식 종목별 결과 테이블
         self.tbl_cond_results = _make_table(
             ["종목코드", "전략", "수익률", "MDD", "매매횟수", "승률"],
             stretch_col=0
         )
         result_tabs.addTab(self.tbl_cond_results, "종목별 결과 (조건식)")
 
-        splitter.addWidget(result_tabs)
-        splitter.setSizes([350, 180])
-        vbox.addWidget(splitter, 1)
+        self._main_splitter.addWidget(result_tabs)
+        self._main_splitter.setSizes([360, 190])
+        root.addWidget(self._main_splitter, 1)
 
-        # 하단 버튼
+        # ── 하단 버튼 ───────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         self.btn_save_chart = QPushButton("차트 저장 (PNG)")
         btn_row.addWidget(self.btn_save_chart)
         btn_row.addStretch()
-        vbox.addLayout(btn_row)
+        root.addLayout(btn_row)
 
-        # 시그널
+        # ── 파라미터 스핀박스 딕셔너리 (전략별 동적 생성) ──────────────────
+        self._param_spins = {}   # {param_name: QSpinBox}
+        self._rebuild_param_ui()
+
+        # 시그널 연결
         self.btn_run_bt.clicked.connect(self._on_run)
         self.rb_single.toggled.connect(self._on_mode_changed)
+        self.combo_strat.currentTextChanged.connect(self._on_strategy_changed)
+        self.spin_sl.valueChanged.connect(self._refresh_logic_text)
+        self.spin_tp.valueChanged.connect(self._refresh_logic_text)
         self._on_mode_changed()
+        self._refresh_logic_text()
 
+    # ── 전략 UI 동적 갱신 ────────────────────────────────────────────────────
+    def _rebuild_param_ui(self):
+        """현재 선택 전략의 파라미터 스핀박스를 재생성"""
+        # 기존 위젯 제거
+        while self._param_grid.count():
+            w = self._param_grid.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        self._param_spins.clear()
+
+        strat = self.combo_strat.currentText()
+        meta = _STRATEGY_META.get(strat, {})
+        params = meta.get("params", [])
+        color = meta.get("color", "#e6edf3")
+
+        for row, (name, label, default, mn, mx, step) in enumerate(params):
+            lbl = QLabel(f"{label}:")
+            spin = QSpinBox()
+            spin.setRange(mn, mx); spin.setSingleStep(step); spin.setValue(default)
+            hint = QLabel(f"({mn} ~ {mx})")
+            hint.setStyleSheet("color:#8b949e; font-size:9px;")
+            self._param_grid.addWidget(lbl,  row, 0)
+            self._param_grid.addWidget(spin, row, 1)
+            self._param_grid.addWidget(hint, row, 2)
+            self._param_spins[name] = spin
+            spin.valueChanged.connect(self._refresh_logic_text)
+
+        # 색상 힌트
+        self._param_box.setTitle(f"전략 파라미터  ─  {strat}")
+        self._param_box.setStyleSheet(
+            f"QGroupBox::title {{ color: {color}; font-weight:bold; }}"
+        )
+
+    def _refresh_logic_text(self):
+        """매수/매도 로직 설명 텍스트 갱신 (파라미터 값 반영)"""
+        strat = self.combo_strat.currentText()
+        meta = _STRATEGY_META.get(strat, {})
+        sl = self.spin_sl.value()
+        tp = self.spin_tp.value()
+
+        lines = [f"[ {strat} ]", ""]
+        # 전략 파라미터 현재 값 한줄 요약
+        param_summary = "  파라미터: "
+        parts = []
+        for name, label, *_ in meta.get("params", []):
+            spin = self._param_spins.get(name)
+            if spin:
+                parts.append(f"{label}={spin.value()}")
+        param_summary += ",  ".join(parts) if parts else "(없음)"
+        lines.append(param_summary)
+        lines.append("")
+
+        buy_logic  = meta.get("buy_logic",  "")
+        sell_logic = meta.get("sell_logic", "")
+        if buy_logic:
+            lines.append(buy_logic)
+        lines.append("")
+        if sell_logic:
+            # 손절/익절 수치 치환
+            sell_logic = sell_logic.replace(
+                "설정 손절%", f"{sl:.1f}%"
+            ).replace(
+                "설정 익절%", f"+{tp:.1f}%"
+            )
+            lines.append(sell_logic)
+        lines.append("")
+        lines.append(f"  손절 {sl:.1f}% / 익절 +{tp:.1f}% 공통 적용")
+
+        self.txt_logic.setText("\n".join(lines))
+
+    def _on_strategy_changed(self):
+        self._rebuild_param_ui()
+        self._refresh_logic_text()
+
+    # ── 모드 토글 ────────────────────────────────────────────────────────────
     def _on_mode_changed(self):
         single = self.rb_single.isChecked()
-        self.lbl_code.setVisible(single)
-        self.edit_bt_code.setVisible(single)
-        self.lbl_cond.setVisible(not single)
-        self.combo_bt_cond.setVisible(not single)
-        self.lbl_cond_stocks.setVisible(not single)
+        for w in (self.lbl_code, self.edit_bt_code, self.lbl_code_hint):
+            w.setVisible(single)
+        for w in (self.lbl_cond, self.combo_bt_cond, self.lbl_cond_stocks):
+            w.setVisible(not single)
 
     def set_conditions(self, names: list):
-        """조건탭에서 조건식 목록을 동기화"""
         self.combo_bt_cond.clear()
         self.combo_bt_cond.addItems(names)
 
     def update_cond_stock_hint(self, cond_name: str, count: int):
-        """조건식 선택 시 편입 종목 수 힌트 표시"""
         self.lbl_cond_stocks.setText(f"편입 종목: {count}개")
 
+    # ── 실행 요청 ─────────────────────────────────────────────────────────────
     def _on_run(self):
         mode = "single" if self.rb_single.isChecked() else "condition"
-        code = self.edit_bt_code.text().strip() if mode == "single" else ""
-        cond = self.combo_bt_cond.currentText() if mode == "condition" else ""
-        self.run_requested.emit(
-            code,
-            self.combo_strat.currentText(),
-            self.spin_bt_days.value(),
-            self.spin_bt_cash.value(),
-            mode,
-            cond,
-        )
+        payload = {
+            "code":      self.edit_bt_code.text().strip() if mode == "single" else "",
+            "strat":     self.combo_strat.currentText(),
+            "days":      self.spin_bt_days.value(),
+            "cash":      self.spin_bt_cash.value(),
+            "buy_amount": self.spin_bt_buy.value(),
+            "mode":      mode,
+            "cond":      self.combo_bt_cond.currentText() if mode == "condition" else "",
+            "stop_loss": self.spin_sl.value() / 100,
+            "take_profit": self.spin_tp.value() / 100,
+            "params":    {k: s.value() for k, s in self._param_spins.items()},
+        }
+        self.run_requested.emit(payload)
 
+    # ── 차트 위젯 lazy init ──────────────────────────────────────────────────
     def _ensure_chart_widget(self):
-        """차트 위젯을 최초 1회 생성하고 플레이스홀더를 교체한다."""
         if self._chart_widget is not None:
             return
         try:
             from backtest.chart import BacktestChartWidget
             self._chart_widget = BacktestChartWidget()
-            # 스플리터에서 placeholder 교체
-            splitter = self._chart_placeholder.parent()
-            if isinstance(splitter, QSplitter):
-                idx = splitter.indexOf(self._chart_placeholder)
+            if self._chart_placeholder.parent() is self._main_splitter:
+                idx = self._main_splitter.indexOf(self._chart_placeholder)
                 self._chart_placeholder.setParent(None)
-                splitter.insertWidget(idx, self._chart_widget.canvas)
-                splitter.setSizes([350, 180])
+                self._main_splitter.insertWidget(idx, self._chart_widget.canvas)
+                self._main_splitter.setSizes([360, 190])
         except Exception as e:
-            logger.warning("차트 위젯 초기화 실패 (matplotlib Qt5Agg 없음?): %s", e)
+            logger.warning("차트 위젯 초기화 실패: %s", e)
 
+    # ── 결과 표시 ─────────────────────────────────────────────────────────────
     def show_result(self, result: dict, df=None):
         ret = result.get("total_return", 0)
         mdd = result.get("mdd", 0)
@@ -1155,7 +1363,6 @@ class _BacktestTab(QWidget):
             self._chart_widget.update_chart(result, df)
 
     def show_condition_results(self, results: list):
-        """조건식 모드: 종목별 결과 테이블 채우기"""
         self.tbl_cond_results.setRowCount(len(results))
         for r, res in enumerate(results):
             ret = res.get("total_return", 0)
@@ -1172,20 +1379,19 @@ class _BacktestTab(QWidget):
                 if c == 2:
                     item.setForeground(QBrush(color))
                 self.tbl_cond_results.setItem(r, c, item)
-        # 집계 결과를 카드에 표시
+
         if results:
-            avg_ret = sum(r.get("total_return", 0) for r in results) / len(results)
-            avg_mdd = sum(r.get("mdd", 0) for r in results) / len(results)
-            total_trades = sum(r.get("trade_count", 0) for r in results)
-            wins = sum(r.get("win_count", 0) for r in results)
-            total_for_wr = sum(r.get("trade_count", 0) for r in results)
-            avg_wr = wins / total_for_wr if total_for_wr else 0
+            avg_ret   = sum(r.get("total_return", 0) for r in results) / len(results)
+            avg_mdd   = sum(r.get("mdd", 0) for r in results) / len(results)
+            total_tr  = sum(r.get("trade_count", 0) for r in results)
+            wins      = sum(r.get("win_count", 0) for r in results)
+            avg_wr    = wins / total_tr if total_tr else 0
             self._bt_cards["ret"].setText(f"{avg_ret:+.2%} (평균)")
             self._bt_cards["ret"].setStyleSheet(
                 "color:#3fb950;" if avg_ret >= 0 else "color:#f85149;"
             )
             self._bt_cards["mdd"].setText(f"{avg_mdd:.2%}")
-            self._bt_cards["trades"].setText(f"{total_trades}회 / {len(results)}종목")
+            self._bt_cards["trades"].setText(f"{total_tr}회 / {len(results)}종목")
             self._bt_cards["wr"].setText(f"{avg_wr:.0%}")
 
     def save_chart(self, result: dict, df=None):
@@ -1905,7 +2111,24 @@ class MainWindow(QMainWindow):
             logger.warning("조건식 로드 실패: %s", e)
 
     # ── 백테스트 ─────────────────────────────────────────────────────────────
-    def _run_backtest(self, code, strat_name, days, cash, mode="single", cond_name=""):
+    def _run_backtest(self, payload: dict):
+        """
+        payload keys:
+            code, strat, days, cash, buy_amount, mode, cond,
+            stop_loss (float, e.g. -0.05), take_profit (float, e.g. 0.10),
+            params (dict of strategy-specific params)
+        """
+        code      = payload.get("code", "")
+        strat_name= payload.get("strat", "MA 골든크로스")
+        days      = payload.get("days", 365)
+        cash      = payload.get("cash", 10_000_000)
+        buy_amount= payload.get("buy_amount", 1_000_000)
+        mode      = payload.get("mode", "single")
+        cond_name = payload.get("cond", "")
+        stop_loss = payload.get("stop_loss", -0.05)
+        take_profit = payload.get("take_profit", 0.10)
+        params    = payload.get("params", {})
+
         if self._mdata is None:
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 백테스트 가능합니다.")
             return
@@ -1925,63 +2148,88 @@ class MainWindow(QMainWindow):
             from backtest.engine import BacktestEngine
             from strategy.ma_strategy import MAStrategy
             from strategy.rsi_strategy import RSIStrategy
+            import config.settings as _cfg
 
-            strat = MAStrategy() if strat_name.startswith("MA") else RSIStrategy()
-            engine = BacktestEngine(strat, initial_cash=cash)
-            start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
-
-            if mode == "single":
-                self._log(f"백테스트 시작: {code} / {strat_name} / {days}일", 0)
-                df = self._mdata.get_daily_ohlcv(code, start)
-                result = engine.run(df, code)
-                self._bt_result = result
-                self._bt_df = df
-                self.tab_backtest.show_result(result, df)
-                self._log(
-                    f"백테스트 완료: {result.get('strategy')} "
-                    f"수익률 {result.get('total_return', 0):+.2%}", 0
+            # 전략 객체 생성 (UI 파라미터 적용)
+            if strat_name.startswith("MA"):
+                strat = MAStrategy(
+                    short_period=params.get("short_period", 5),
+                    long_period=params.get("long_period", 20),
                 )
             else:
-                # 조건식 모드: 조건탭에 편입된 종목 목록 수집
-                codes = self._get_condition_codes(cond_name)
-                if not codes:
-                    QMessageBox.warning(
-                        self, "안내",
-                        f"조건식 '{cond_name}'에 편입된 종목이 없습니다.\n"
-                        "조건식 매매 탭에서 조건식을 로드하거나 실시간 운영 후 다시 시도하세요."
-                    )
-                    return
-                self._log(
-                    f"[조건식백테스트] {cond_name} / {len(codes)}종목 / {strat_name} / {days}일", 0
+                strat = RSIStrategy(
+                    period=params.get("period", 14),
+                    oversold=params.get("oversold", 30),
+                    overbought=params.get("overbought", 70),
                 )
-                results = []
-                for i, c in enumerate(codes):
-                    self._log(f"  [{i+1}/{len(codes)}] {c} 조회 중...", 0)
-                    QApplication.processEvents()
-                    try:
-                        df_c = self._mdata.get_daily_ohlcv(c, start)
-                        res_c = engine.run(df_c, c)
-                        results.append(res_c)
-                    except Exception as e:
-                        self._log(f"  [{c}] 오류 – {e}", 0)
 
-                self._bt_result = results[0] if results else {}
-                self._bt_df = None
-                self.tab_backtest.show_condition_results(results)
-                if results:
-                    # 첫 종목 차트 표시
-                    first_df = self._mdata.get_daily_ohlcv(results[0]["code"], start)
-                    self.tab_backtest.show_result(results[0], first_df)
-                self._log(
-                    f"[조건식백테스트 완료] {len(results)}종목 처리", 0
-                )
+            # 손절/익절을 전략 인스턴스에 일시 적용 (config 우회)
+            _orig_sl = _cfg.STOP_LOSS_RATE
+            _orig_tp = _cfg.TAKE_PROFIT_RATE
+            _cfg.STOP_LOSS_RATE  = stop_loss
+            _cfg.TAKE_PROFIT_RATE = take_profit
+
+            engine = BacktestEngine(strat, initial_cash=cash, buy_amount=buy_amount)
+            start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
+
+            try:
+                if mode == "single":
+                    self._log(
+                        f"백테스트: {code} / {strat_name} / {days}일 "
+                        f"/ 손절{stop_loss:.0%} 익절{take_profit:+.0%}", 0
+                    )
+                    df = self._mdata.get_daily_ohlcv(code, start)
+                    result = engine.run(df, code)
+                    self._bt_result = result
+                    self._bt_df = df
+                    self.tab_backtest.show_result(result, df)
+                    self._log(
+                        f"백테스트 완료: {result.get('strategy')} "
+                        f"수익률 {result.get('total_return', 0):+.2%}", 0
+                    )
+                else:
+                    codes = self._get_condition_codes(cond_name)
+                    if not codes:
+                        QMessageBox.warning(
+                            self, "안내",
+                            f"조건식 '{cond_name}'에 편입된 종목이 없습니다.\n"
+                            "조건식 매매 탭에서 조건식을 로드하거나\n"
+                            "실시간 운영 후 다시 시도하세요."
+                        )
+                        return
+                    self._log(
+                        f"[조건식백테스트] {cond_name} / {len(codes)}종목 / "
+                        f"{strat_name} / {days}일", 0
+                    )
+                    results = []
+                    for i, c in enumerate(codes):
+                        self._log(f"  [{i+1}/{len(codes)}] {c} 조회 중...", 0)
+                        QApplication.processEvents()
+                        try:
+                            df_c = self._mdata.get_daily_ohlcv(c, start)
+                            res_c = engine.run(df_c, c)
+                            results.append(res_c)
+                        except Exception as ex:
+                            self._log(f"  [{c}] 오류 – {ex}", 0)
+
+                    self._bt_result = results[0] if results else {}
+                    self._bt_df = None
+                    self.tab_backtest.show_condition_results(results)
+                    if results:
+                        first_df = self._mdata.get_daily_ohlcv(results[0]["code"], start)
+                        self.tab_backtest.show_result(results[0], first_df)
+                    self._log(f"[조건식백테스트 완료] {len(results)}종목 처리", 0)
+            finally:
+                _cfg.STOP_LOSS_RATE  = _orig_sl
+                _cfg.TAKE_PROFIT_RATE = _orig_tp
+
         except Exception as e:
             logger.error("백테스트 오류: %s", e)
             self._log(f"백테스트 오류: {e}", 0)
             QMessageBox.critical(self, "오류", str(e))
         finally:
             self.tab_backtest.btn_run_bt.setEnabled(True)
-            self.tab_backtest.btn_run_bt.setText("▶  백테스트 실행")
+            self.tab_backtest.btn_run_bt.setText("▶   백테스트 실행")
 
     def _get_condition_codes(self, cond_name: str) -> list:
         """조건식 탭의 실시간 편입 종목 테이블에서 종목코드 수집"""
