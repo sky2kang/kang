@@ -1630,21 +1630,31 @@ class MainWindow(QMainWindow):
         days = self.tab_analysis.spin_days.value()
         self.tab_analysis.btn_analyze.setEnabled(False)
         self.tab_analysis.btn_analyze.setText("분석 중...")
-        self._analysis_thread = _AnalysisThread(self._mdata, code, days)
-        self._analysis_thread.finished.connect(self._on_analysis_done)
-        self._analysis_thread.error.connect(self._on_analysis_error)
-        self._analysis_thread.start()
-
-    def _on_analysis_done(self, analysis: dict, code: str, name: str):
-        self.tab_analysis.show_analysis(analysis, code, name)
-        self._log(f"분석 완료: {name}({code})", 0)
-
-    def _on_analysis_error(self, msg: str):
-        self.tab_analysis.btn_analyze.setEnabled(True)
-        self.tab_analysis.btn_analyze.setText("분석 실행")
-        logger.error("분석 오류: %s", msg)
-        self._log(f"분석 오류: {msg}", 0)
-        QMessageBox.critical(self, "분석 오류", msg)
+        QApplication.processEvents()
+        try:
+            import datetime as dt
+            from core.analyzer import StockAnalyzer
+            start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
+            # 키움 OCX는 메인 스레드에서만 TR 응답을 받으므로 동기 실행
+            df = self._mdata.get_daily_ohlcv(code, start)
+            name = code
+            try:
+                kiwoom = getattr(self._mdata, "api", None)
+                if kiwoom:
+                    n = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
+                    if n:
+                        name = n
+            except Exception:
+                pass
+            analysis = StockAnalyzer(df).analyze()
+            self.tab_analysis.show_analysis(analysis, code, name)
+            self._log(f"분석 완료: {name}({code})", 0)
+        except Exception as e:
+            logger.error("분석 오류: %s", e)
+            self._log(f"분석 오류: {e}", 0)
+            QMessageBox.critical(self, "분석 오류", str(e))
+            self.tab_analysis.btn_analyze.setEnabled(True)
+            self.tab_analysis.btn_analyze.setText("분석 실행")
 
     # ── 스케줄 체크 ──────────────────────────────────────────────────────────
     def _check_schedule(self):
