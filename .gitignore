@@ -8,6 +8,10 @@ venv/
 # 환경 설정 (민감 정보)
 .env
 
+# GUI 런타임 생성 설정 (사용자별 로컬 상태)
+config/gui_settings.json
+config/watchlist.json
+
 # 로그 및 데이터
 logs/
 data/*.db
