@@ -90,9 +90,9 @@ def main():
 
     # GUI 대시보드 모드
     if args.gui:
-        from gui.dashboard import run_gui
-        logger.info("GUI 대시보드를 실행합니다.")
-        run_gui(controller=None)  # 데모 모드 (실거래 연동은 controller 주입)
+        from gui.main_window import MainWindow, run_standalone
+        logger.info("HTS GUI를 실행합니다.")
+        run_standalone()
         return
 
     is_simul = args.simul == "true"

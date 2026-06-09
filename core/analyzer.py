@@ -225,3 +225,40 @@ class StockAnalyzer:
             mark = "▲" if score > 0 else ("▼" if score < 0 else "−")
             lines.append(f" {mark} {name_}: {comment}")
         return "\n".join(lines)
+
+    @staticmethod
+    def report_text_from(analysis: dict, code: str = "", name: str = "") -> str:
+        """analyze() 결과 dict를 받아 리포트 텍스트 반환 (GUI용)"""
+        a = analysis
+        opinion_text, emoji = a.get("opinion", ("중립", "⚪"))
+        lines = []
+        title = f"{name}({code})" if name else code
+        lines.append(f"═══ 종목 분석: {title} ═══")
+        lines.append(f"현재가: {a.get('price', 0):,}원")
+        lines.append(f"종합의견: {emoji} {opinion_text} (점수 {a.get('total_score', 0)})")
+        lines.append("")
+        lines.append("[기술적 지표]")
+        ma = a.get("moving_averages") or a.get("ma") or {}
+        lines.append(
+            f" · 이동평균: 5일={ma.get('ma5')}, 20일={ma.get('ma20')}, 60일={ma.get('ma60')}"
+        )
+        lines.append(f" · RSI(14): {a.get('rsi')}")
+        if a.get("macd"):
+            m = a["macd"]
+            lines.append(f" · MACD: {m.get('macd')} / 시그널 {m.get('signal')}")
+        if a.get("bollinger"):
+            b = a["bollinger"]
+            lines.append(
+                f" · 볼린저: 하단 {b.get('lower', 0):,} ~ 상단 {b.get('upper', 0):,}"
+            )
+        if a.get("volume"):
+            lines.append(f" · 거래량: 평균 대비 {a['volume'].get('ratio')}배")
+        sr = a.get("support_resistance") or {}
+        if sr:
+            lines.append(f" · 지지선 {sr.get('support', 0):,} / 저항선 {sr.get('resistance', 0):,}")
+        lines.append("")
+        lines.append("[신호 상세]")
+        for sig_name, score, comment in a.get("signals", []):
+            mark = "▲" if score > 0 else ("▼" if score < 0 else "−")
+            lines.append(f" {mark} {sig_name}: {comment}")
+        return "\n".join(lines)
