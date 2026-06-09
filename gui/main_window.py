@@ -1301,6 +1301,10 @@ class MainWindow(QMainWindow):
         self._refresh_timer.timeout.connect(self._refresh_balance)
         self._refresh_timer.start(60000)
 
+        # 시작 시 저장된 설정 자동 복원
+        self._load_settings()
+        self._load_individual_stocks()
+
         # 스케줄러 체크 타이머
         self._sched_timer = QTimer(self)
         self._sched_timer.timeout.connect(self._check_schedule)
@@ -1453,6 +1457,7 @@ class MainWindow(QMainWindow):
             self.header.set_trading(True)
             self.status_mode.setText("모드: 매매 중")
             self._log("매매 시작", 0)
+            self._save_settings()  # 매매 시작 시 설정 자동 저장
         except Exception as e:
             QMessageBox.critical(self, "오류", str(e))
 
@@ -1787,11 +1792,61 @@ class MainWindow(QMainWindow):
         path = "config/gui_settings.json"
         os.makedirs("config", exist_ok=True)
         try:
+            data = self._collect_settings()
+            # 종목별 매매 탭 종목 목록 저장
+            data["individual_stocks"] = self._get_individual_stocks()
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self._collect_settings(), f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2)
             self.statusBar().showMessage("설정 저장 완료", 3000)
         except Exception as e:
             QMessageBox.critical(self, "저장 오류", str(e))
+
+    def _get_individual_stocks(self):
+        """종목별 매매 탭의 종목 목록을 dict 리스트로 반환"""
+        tbl = self.tab_individual.tbl
+        rows = []
+        for r in range(tbl.rowCount()):
+            rows.append({
+                "active": tbl.item(r, 0).checkState() == Qt.Checked if tbl.item(r, 0) else True,
+                "code": tbl.item(r, 1).text() if tbl.item(r, 1) else "",
+                "name": tbl.item(r, 2).text() if tbl.item(r, 2) else "",
+                "target": tbl.item(r, 4).text() if tbl.item(r, 4) else "--",
+                "stop": tbl.item(r, 5).text() if tbl.item(r, 5) else "--",
+                "invest": tbl.item(r, 6).text() if tbl.item(r, 6) else "1,000,000",
+                "trailing": tbl.item(r, 8).text() if tbl.item(r, 8) else "--",
+            })
+        return rows
+
+    def _load_individual_stocks(self):
+        """저장된 종목별 매매 종목 목록 복원"""
+        import json
+        path = "config/gui_settings.json"
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            stocks = data.get("individual_stocks", [])
+            tbl = self.tab_individual.tbl
+            tbl.setRowCount(0)
+            for s in stocks:
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                chk = QTableWidgetItem()
+                chk.setCheckState(Qt.Checked if s.get("active", True) else Qt.Unchecked)
+                tbl.setItem(r, 0, chk)
+                # 현재가는 "--" 으로 복원 (실시간 조회 필요)
+                for c, val in enumerate([
+                    s.get("code", ""), s.get("name", ""), "--",
+                    s.get("target", "--"), s.get("stop", "--"),
+                    s.get("invest", "1,000,000"), "X",
+                    s.get("trailing", "--"), "대기"
+                ], 1):
+                    item = QTableWidgetItem(val)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    tbl.setItem(r, c, item)
+        except Exception as e:
+            logger.debug("종목별 매매 목록 복원 실패: %s", e)
 
     def _load_settings(self):
         import json
