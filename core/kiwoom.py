@@ -104,10 +104,11 @@ class KiwoomAPI(QAxWidget):
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
                             prev_next, *args):
-        logger.debug(f"TR 수신: {rq_name} ({tr_code}), 다음페이지={prev_next}")
+        logger.info(f"TR 수신: {rq_name} ({tr_code}), record_name={record_name!r}, 다음페이지={prev_next}")
         self.tr_data["prev_next"] = prev_next
         self.tr_data["rq_name"] = rq_name
         self.tr_data["tr_code"] = tr_code
+        self.tr_data["record_name"] = record_name
         self._tr_event.quit()
 
     def get_comm_data(self, tr_code, record_name, index, item_name):

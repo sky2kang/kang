@@ -132,11 +132,21 @@ class MarketDataAPI:
         self.api.set_input_value("조회구분", "2")
         self.api.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
 
-        deposit = self.api.get_comm_data("opw00001", "예수금상세현황", 0, "예수금").replace(",", "")
-        available = self.api.get_comm_data(
-            "opw00001", "예수금상세현황", 0, "출금가능금액").replace(",", "")
-        ordable = self.api.get_comm_data(
-            "opw00001", "예수금상세현황", 0, "주문가능금액").replace(",", "")
+        # 콜백에서 받은 실제 record_name 을 우선 사용, 없으면 후보 목록 순차 시도
+        rec = self.api.tr_data.get("record_name") or "예수금상세현황"
+        logger.info("opw00001 get_comm_data record_name=%r", rec)
+
+        def _get(field):
+            for r in (rec, "예수금상세현황", ""):
+                v = self.api.get_comm_data("opw00001", r, 0, field).replace(",", "")
+                if v:
+                    return v
+            return ""
+
+        deposit = _get("예수금")
+        available = _get("출금가능금액")
+        ordable = _get("주문가능금액")
+        logger.info("opw00001 raw: 예수금=%r 출금가능=%r 주문가능=%r", deposit, available, ordable)
 
         def _to_int(s):
             s = (s or "").lstrip("0") or "0"
