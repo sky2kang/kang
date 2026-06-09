@@ -1621,8 +1621,15 @@ class MainWindow(QMainWindow):
 
     # ── 종목 분석 ────────────────────────────────────────────────────────────
     def _run_analysis(self):
+        self._log("분석 실행 버튼 클릭됨", 0)
         code = self.tab_analysis.edit_code.text().strip()
         if not code:
+            # 입력이 없으면 placeholder(예시 종목) 사용
+            code = self.tab_analysis.edit_code.placeholderText().strip()
+            if code:
+                self.tab_analysis.edit_code.setText(code)
+        if not code:
+            QMessageBox.warning(self, "안내", "종목코드를 입력하세요.")
             return
         if self._mdata is None:
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 분석 가능합니다.")
