@@ -1430,6 +1430,7 @@ class MainWindow(QMainWindow):
         self.tab_individual.btn_add.clicked.connect(self._add_individual_stock)
         self.tab_individual.btn_del.clicked.connect(self._del_individual_stock)
         self.tab_individual.btn_import.clicked.connect(self._import_individual_csv)
+        self.tab_individual.btn_apply_detail.clicked.connect(self._apply_individual_detail)
         # 탭 전환 시 당일 거래내역 갱신
         self.tabs.currentChanged.connect(self._on_tab_changed)
         # 시작 시 관심종목 불러오기
@@ -1952,17 +1953,71 @@ class MainWindow(QMainWindow):
                         name = fetched
             except Exception:
                 pass
+        # 현재가 조회
+        price_str = "--"
+        if self._mdata:
+            try:
+                info = self._mdata.get_stock_info(code)
+                price_str = f"{info['price']:,}"
+            except Exception:
+                pass
+
         tbl = self.tab_individual.tbl
         r = tbl.rowCount()
         tbl.insertRow(r)
         chk = QTableWidgetItem()
         chk.setCheckState(Qt.Checked)
         tbl.setItem(r, 0, chk)
-        for c, val in enumerate([code, name, "--", "--", "--", "1,000,000", "X", "--", "대기"], 1):
+        for c, val in enumerate([code, name, price_str, "--", "--", "1,000,000", "X", "--", "대기"], 1):
             item = QTableWidgetItem(val)
             item.setTextAlignment(Qt.AlignCenter)
             tbl.setItem(r, c, item)
         self.tab_individual.edit_code.clear()
+
+    def _apply_individual_detail(self):
+        """선택된 종목에 하단 상세설정(목표/손절/투자금/밴드/트레일링)을 적용한다."""
+        tbl = self.tab_individual.tbl
+        selected_rows = {idx.row() for idx in tbl.selectedIndexes()}
+        if not selected_rows:
+            # 선택이 없으면 활성화된 모든 종목에 적용
+            selected_rows = set()
+            for r in range(tbl.rowCount()):
+                chk = tbl.item(r, 0)
+                if chk and chk.checkState() == Qt.Checked:
+                    selected_rows.add(r)
+        if not selected_rows:
+            self._log("적용할 종목을 선택하거나 활성화해 주세요.", 0)
+            return
+
+        spins = self.tab_individual._detail_spins
+        # 순서: 목표수익률%, 손절비율%, 1회투자금, 가격밴드상단, 가격밴드하단, 트레일링%
+        take_profit = spins[0].value()  # %
+        stop_loss   = spins[1].value()  # %
+        invest_amt  = spins[2].value()  # 원
+        band_high   = spins[3].value()  # 원
+        band_low    = spins[4].value()  # 원
+        trailing    = spins[5].value()  # %
+
+        for r in selected_rows:
+            # 현재가 기준으로 목표가/손절가 계산
+            price_raw = tbl.item(r, 3).text().replace(",", "") if tbl.item(r, 3) else ""
+            try:
+                price = int(price_raw)
+                target = int(price * (1 + take_profit / 100))
+                stop   = int(price * (1 - stop_loss / 100))
+                tbl.item(r, 4).setText(f"{target:,}")  # 목표가
+                tbl.item(r, 5).setText(f"{stop:,}")    # 손절가
+            except (ValueError, AttributeError):
+                pass  # 현재가 없으면 목표가/손절가는 그대로
+
+            # 투자금 업데이트
+            if tbl.item(r, 6):
+                tbl.item(r, 6).setText(f"{invest_amt:,}")
+            # 트레일링
+            if tbl.item(r, 8):
+                tbl.item(r, 8).setText(f"{trailing:.2f}%")
+
+        self._log(f"상세설정 {len(selected_rows)}개 종목에 적용 완료", 0)
 
     def _del_individual_stock(self):
         rows = sorted(
