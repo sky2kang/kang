@@ -120,37 +120,42 @@ class KiwoomAPI(QAxWidget):
 
     def _on_receive_tr_data(self, screen_no, rq_name, tr_code, record_name,
                             prev_next, *args):
-<<<<<<< Updated upstream
-        logger.info(f"TR 수신: {rq_name} ({tr_code}), record_name={record_name!r}, 다음페이지={prev_next}")
         self.tr_data["prev_next"] = prev_next
         self.tr_data["rq_name"] = rq_name
         self.tr_data["tr_code"] = tr_code
         self.tr_data["record_name"] = record_name
-=======
-        self.tr_data["prev_next"] = prev_next
 
-        # 콜백 내에서 데이터를 읽어 저장 (콜백 종료 후에는 버퍼가 비워짐)
+        # 콜백 내에서 데이터를 읽어 저장 (콜백 종료 후에는 버퍼가 비워짐).
+        # GetCommData 의 record_name 인자는 서버가 넘겨준 record_name 을 우선 사용하고,
+        # 비어 있으면 rq_name 으로 대체한다. (opw00001 등은 rq_name 과 동일)
+        rec = record_name or rq_name
         for field in self._tr_single_fields:
-            self.tr_data["single"][field] = self.dynamicCall(
+            val = self.dynamicCall(
                 "GetCommData(QString, QString, int, QString)",
-                tr_code, rq_name, 0, field
+                tr_code, rec, 0, field
             ).strip()
+            if not val and rec != rq_name:
+                val = self.dynamicCall(
+                    "GetCommData(QString, QString, int, QString)",
+                    tr_code, rq_name, 0, field
+                ).strip()
+            self.tr_data["single"][field] = val
 
         if self._tr_multi_fields:
-            cnt = self.dynamicCall("GetRepeatCnt(QString, QString)", tr_code, rq_name)
+            cnt = self.dynamicCall("GetRepeatCnt(QString, QString)", tr_code, rec)
             for i in range(cnt):
                 row = {}
                 for field in self._tr_multi_fields:
                     row[field] = self.dynamicCall(
                         "GetCommData(QString, QString, int, QString)",
-                        tr_code, rq_name, i, field
+                        tr_code, rec, i, field
                     ).strip()
                 self.tr_data["multi"].append(row)
 
-        logger.info(f"TR 수신: {rq_name} ({tr_code}), 다음페이지={prev_next}, "
+        logger.info(f"TR 수신: {rq_name} ({tr_code}), record_name={record_name!r}, "
+                    f"다음페이지={prev_next}, "
                     f"단건={len(self.tr_data['single'])}개, 반복={len(self.tr_data['multi'])}건")
         self._tr_received = True
->>>>>>> Stashed changes
         self._tr_event.quit()
 
     def get_comm_data(self, tr_code, record_name, index, item_name):

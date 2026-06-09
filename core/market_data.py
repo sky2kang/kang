@@ -125,38 +125,32 @@ class MarketDataAPI:
         """
         예수금상세현황요청. 보유종목 유무와 무관하게 예수금/주문가능금액 반환.
         반환: {deposit: int, available: int}
+        데이터는 OnReceiveTrData 콜백 안에서 읽어야 안정적이므로 single_fields 로 전달.
         """
         self.api.set_input_value("계좌번호", account)
         self.api.set_input_value("비밀번호", password)
         self.api.set_input_value("비밀번호입력매체구분", "00")
         self.api.set_input_value("조회구분", "2")
-        self.api.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
+        self.api.comm_rq_data(
+            "예수금상세현황", "opw00001", 0, "2001",
+            single_fields=["예수금", "출금가능금액", "주문가능금액"],
+        )
 
-        # 콜백에서 받은 실제 record_name 을 우선 사용, 없으면 후보 목록 순차 시도
-        rec = self.api.tr_data.get("record_name") or "예수금상세현황"
-        logger.info("opw00001 get_comm_data record_name=%r", rec)
-
-        def _get(field):
-            for r in (rec, "예수금상세현황", ""):
-                v = self.api.get_comm_data("opw00001", r, 0, field).replace(",", "")
-                if v:
-                    return v
-            return ""
-
-        deposit = _get("예수금")
-        available = _get("출금가능금액")
-        ordable = _get("주문가능금액")
-        logger.info("opw00001 raw: 예수금=%r 출금가능=%r 주문가능=%r", deposit, available, ordable)
+        single = self.api.tr_data.get("single", {})
+        logger.info("opw00001 single=%s", single)
 
         def _to_int(s):
-            s = (s or "").lstrip("0") or "0"
+            s = (s or "").replace(",", "").lstrip("0") or "0"
             try:
                 return int(s)
             except ValueError:
                 return 0
 
-        avail_val = _to_int(ordable) or _to_int(available)
-        return {"deposit": _to_int(deposit), "available": avail_val}
+        deposit = _to_int(single.get("예수금"))
+        ordable = _to_int(single.get("주문가능금액"))
+        available = _to_int(single.get("출금가능금액"))
+        avail_val = ordable or available
+        return {"deposit": deposit, "available": avail_val}
 
     # -------------------------------------------------------------------------
     # 계좌 잔고 조회 (opw00018)
@@ -170,11 +164,21 @@ class MarketDataAPI:
         self.api.set_input_value("비밀번호", password)
         self.api.set_input_value("비밀번호입력매체구분", "00")
         self.api.set_input_value("조회구분", "2")
-        self.api.comm_rq_data("계좌잔고조회", "opw00018", 0, "2000")
+        self.api.comm_rq_data(
+            "계좌잔고조회", "opw00018", 0, "2000",
+            single_fields=["총평가금액", "총수익률(%)", "주문가능금액"],
+            multi_fields=["종목명", "종목번호", "보유수량", "매입단가", "수익률(%)"],
+        )
 
-        total_eval = self.api.get_comm_data("opw00018", "계좌잔고조회", 0, "총평가금액").replace(",", "")
-        total_profit = self.api.get_comm_data("opw00018", "계좌잔고조회", 0, "총수익률(%)").replace(",", "")
-        available = self.api.get_comm_data("opw00018", "계좌잔고조회", 0, "주문가능금액").replace(",", "")
+        single = self.api.tr_data.get("single", {})
+        multi = self.api.tr_data.get("multi", [])
+
+        def _num(s):
+            return (s or "").replace(",", "").strip()
+
+        total_eval = _num(single.get("총평가금액"))
+        total_profit = _num(single.get("총수익률(%)"))
+        available = _num(single.get("주문가능금액"))
 
         summary = {
             "total_eval": int(total_eval) if total_eval else 0,
@@ -182,17 +186,14 @@ class MarketDataAPI:
             "available": int(available) if available else 0,
         }
 
-        cnt = self.api.get_repeat_cnt("opw00018", "계좌잔고조회")
         holdings = []
-        for i in range(cnt):
-            name = self.api.get_comm_data("opw00018", "계좌잔고조회", i, "종목명")
-            code = self.api.get_comm_data("opw00018", "계좌잔고조회", i, "종목번호").replace("A", "")
-            qty = self.api.get_comm_data("opw00018", "계좌잔고조회", i, "보유수량").replace(",", "")
-            avg_price = self.api.get_comm_data("opw00018", "계좌잔고조회", i, "매입단가").replace(",", "")
-            profit_rate = self.api.get_comm_data("opw00018", "계좌잔고조회", i, "수익률(%)").replace(",", "")
+        for row in multi:
+            qty = _num(row.get("보유수량"))
+            avg_price = _num(row.get("매입단가"))
+            profit_rate = _num(row.get("수익률(%)"))
             holdings.append({
-                "name": name.strip(),
-                "code": code.strip(),
+                "name": (row.get("종목명") or "").strip(),
+                "code": (row.get("종목번호") or "").replace("A", "").strip(),
                 "qty": int(qty) if qty else 0,
                 "avg_price": int(avg_price) if avg_price else 0,
                 "profit_rate": float(profit_rate) if profit_rate else 0.0,
