@@ -437,121 +437,276 @@ class _DashboardTab(QWidget):
 
 # ── 탭 2 : 조건식 매매 ────────────────────────────────────────────────────────
 class _ConditionTab(QWidget):
+    """
+    좌측: 조건식 목록 (체크로 활성화, 클릭으로 선택)
+    우측 상단: 조건식 미리보기 (편입 종목 목록)
+    우측 하단: 선택된 조건식의 개별 전략 설정
+    """
+
+    # 조건식별 기본 전략 설정
+    DEFAULT_STRATEGY = {
+        "entry":      0,       # 0=시장가 1=현재가 2=매도1호가 3=매도2호가
+        "buy_amount": 1_000_000,
+        "take_profit": 5.0,    # %
+        "stop_loss":   2.0,    # %
+        "trailing":   False,
+        "trail_start": 3.0,    # %
+        "trail_drop":  1.5,    # %
+        "max_stocks":  5,
+        "reenter_min": 20,
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        # {조건식이름: {설정dict}}
+        self._cond_strategies = {}
+        # {조건식이름: [편입종목코드, ...]}
+        self._cond_stocks = {}
         self._build()
 
+    # ── UI 빌드 ──────────────────────────────────────────────────────────────
     def _build(self):
         hbox = QHBoxLayout(self)
         hbox.setSpacing(8)
 
-        # 좌측: 조건식 목록
+        # ── 좌측: 조건식 목록 ────────────────────────────────────────────────
         left = QGroupBox("조건검색식 목록")
         lv = QVBoxLayout(left)
+
         self.cond_list = QListWidget()
-        self.cond_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.cond_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.cond_list.currentRowChanged.connect(self._on_cond_selected)
         lv.addWidget(self.cond_list)
+
         btn_row = QHBoxLayout()
-        self.btn_load_cond = QPushButton("조건식 불러오기")
+        self.btn_load_cond = QPushButton("📥 조건식 불러오기")
         self.btn_load_cond.setObjectName("btnBuy")
         btn_row.addWidget(self.btn_load_cond)
         lv.addLayout(btn_row)
+
         left.setMinimumWidth(200)
         left.setMaximumWidth(260)
         hbox.addWidget(left)
 
-        # 우측: 설정
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setSpacing(8)
+        # ── 우측 ─────────────────────────────────────────────────────────────
+        right_splitter = QSplitter(Qt.Vertical)
 
-        # 진입 가격
-        g1 = QGroupBox("진입 가격 (호가) 설정")
-        g1v = QVBoxLayout(g1)
-        self._price_grp = QButtonGroup(self)
-        for i, (lbl, tip) in enumerate([
-            ("시장가", "포착 즉시 시장가 매수"),
-            ("현재가", "포착 시점 현재가로 지정가"),
-            ("매도1호가", "매도 1호가에 걸기"),
-            ("매도2호가", "매도 2호가에 걸기"),
-        ]):
-            rb = QRadioButton(lbl)
-            rb.setToolTip(tip)
-            if i == 0:
-                rb.setChecked(True)
-            self._price_grp.addButton(rb, i)
-            g1v.addWidget(rb)
-        rv.addWidget(g1)
+        # 우측 상단: 편입 종목 미리보기
+        preview_box = QGroupBox("실시간 편입 종목")
+        pv = QVBoxLayout(preview_box)
+        self.lbl_cond_name = QLabel("조건식을 선택하세요")
+        self.lbl_cond_name.setStyleSheet("font-weight:bold; font-size:13px;")
+        pv.addWidget(self.lbl_cond_name)
 
-        # 매수 금액
-        g2 = QGroupBox("매수 자금 설정")
-        g2g = QGridLayout(g2)
-        g2g.addWidget(QLabel("종목당 금액(원):"), 0, 0)
+        self.tbl_stocks = _make_table(
+            ["종목코드", "종목명", "편입시간", "현재가", "상태"],
+            stretch_col=1
+        )
+        self.tbl_stocks.setMaximumHeight(200)
+        pv.addWidget(self.tbl_stocks)
+        right_splitter.addWidget(preview_box)
+
+        # 우측 하단: 조건식별 전략 설정
+        strategy_box = QGroupBox("선택 조건식 전략 설정")
+        sg = QGridLayout(strategy_box)
+
+        # 진입 방식
+        sg.addWidget(QLabel("진입 방식:"), 0, 0)
+        self.combo_entry = QComboBox()
+        self.combo_entry.addItems(["시장가", "현재가(지정가)", "매도1호가", "매도2호가"])
+        sg.addWidget(self.combo_entry, 0, 1)
+
+        # 1회 투자금
+        sg.addWidget(QLabel("1회 투자금(원):"), 1, 0)
         self.spin_amount = QSpinBox()
         self.spin_amount.setRange(100_000, 100_000_000)
         self.spin_amount.setSingleStep(100_000)
         self.spin_amount.setValue(1_000_000)
-        g2g.addWidget(self.spin_amount, 0, 1)
-        g2g.addWidget(QLabel("또는 예수금 비율(%):"), 1, 0)
-        self.spin_ratio = QDoubleSpinBox()
-        self.spin_ratio.setRange(0, 50)
-        self.spin_ratio.setSingleStep(1)
-        self.spin_ratio.setValue(5)
-        self.spin_ratio.setSuffix(" %")
-        g2g.addWidget(self.spin_ratio, 1, 1)
-        rv.addWidget(g2)
+        self.spin_amount.setSuffix(" 원")
+        self.spin_amount.setGroupSeparatorShown(True)
+        sg.addWidget(self.spin_amount, 1, 1)
 
-        # 최대 보유 / 재매수 제한
-        g3 = QGroupBox("포지션 제한")
-        g3g = QGridLayout(g3)
-        g3g.addWidget(QLabel("최대 동시 보유 종목 수:"), 0, 0)
+        # 익절 / 손절
+        sg.addWidget(QLabel("익절(%):"), 2, 0)
+        self.spin_tp = QDoubleSpinBox()
+        self.spin_tp.setRange(0.1, 100); self.spin_tp.setSingleStep(0.5)
+        self.spin_tp.setValue(5.0); self.spin_tp.setSuffix(" %")
+        sg.addWidget(self.spin_tp, 2, 1)
+
+        sg.addWidget(QLabel("손절(%):"), 3, 0)
+        self.spin_sl = QDoubleSpinBox()
+        self.spin_sl.setRange(0.1, 50); self.spin_sl.setSingleStep(0.5)
+        self.spin_sl.setValue(2.0); self.spin_sl.setSuffix(" %")
+        sg.addWidget(self.spin_sl, 3, 1)
+
+        # 트레일링 스탑
+        sg.addWidget(QLabel("트레일링 스탑:"), 4, 0)
+        self.chk_trail = QCheckBox("활성화")
+        sg.addWidget(self.chk_trail, 4, 1)
+
+        sg.addWidget(QLabel("  발동 수익률(%):"), 5, 0)
+        self.spin_trail_start = QDoubleSpinBox()
+        self.spin_trail_start.setRange(0.5, 50); self.spin_trail_start.setValue(3.0)
+        self.spin_trail_start.setSuffix(" %")
+        sg.addWidget(self.spin_trail_start, 5, 1)
+
+        sg.addWidget(QLabel("  추적 하락폭(%):"), 6, 0)
+        self.spin_trail_drop = QDoubleSpinBox()
+        self.spin_trail_drop.setRange(0.1, 20); self.spin_trail_drop.setValue(1.5)
+        self.spin_trail_drop.setSuffix(" %")
+        sg.addWidget(self.spin_trail_drop, 6, 1)
+
+        # 포지션 제한
+        sg.addWidget(QLabel("최대 보유 종목수:"), 7, 0)
         self.spin_max_stocks = QSpinBox()
-        self.spin_max_stocks.setRange(1, 30)
-        self.spin_max_stocks.setValue(5)
-        g3g.addWidget(self.spin_max_stocks, 0, 1)
-        g3g.addWidget(QLabel("동일 종목 재진입 금지(분):"), 1, 0)
+        self.spin_max_stocks.setRange(1, 30); self.spin_max_stocks.setValue(5)
+        sg.addWidget(self.spin_max_stocks, 7, 1)
+
+        sg.addWidget(QLabel("재진입 금지(분):"), 8, 0)
         self.spin_reenter = QSpinBox()
-        self.spin_reenter.setRange(0, 120)
-        self.spin_reenter.setValue(20)
-        g3g.addWidget(self.spin_reenter, 1, 1)
-        rv.addWidget(g3)
+        self.spin_reenter.setRange(0, 120); self.spin_reenter.setValue(20)
+        sg.addWidget(self.spin_reenter, 8, 1)
 
-        # 분할 매수
-        g4 = QGroupBox("분할 매수 설정")
-        g4v = QVBoxLayout(g4)
-        self.chk_split = QCheckBox("분할 매수 활성화")
-        g4v.addWidget(self.chk_split)
-        g4g = QGridLayout()
-        for i, (stage, default_drop) in enumerate([("1차", 0), ("2차", -2), ("3차", -4)]):
-            g4g.addWidget(QLabel(f"{stage} 하락:"), i, 0)
-            sp = QDoubleSpinBox()
-            sp.setRange(-20, 0); sp.setValue(default_drop); sp.setSuffix("%")
-            g4g.addWidget(sp, i, 1)
-            g4g.addWidget(QLabel("금액:"), i, 2)
-            amt = QSpinBox()
-            amt.setRange(0, 10_000_000); amt.setSingleStep(100_000)
-            amt.setValue(500_000)
-            g4g.addWidget(amt, i, 3)
-        g4v.addLayout(g4g)
-        rv.addWidget(g4)
+        # 저장 버튼
+        self.btn_save_strategy = QPushButton("이 조건식에 적용")
+        self.btn_save_strategy.setObjectName("btnBuy")
+        self.btn_save_strategy.clicked.connect(self._save_current_strategy)
+        sg.addWidget(self.btn_save_strategy, 9, 0, 1, 2)
 
-        rv.addStretch()
-        hbox.addWidget(right)
+        # 전체 공통 설정 안내
+        sg.addWidget(QLabel("※ 적용하지 않으면 전체 공통 설정이 사용됩니다."), 10, 0, 1, 2)
 
+        right_splitter.addWidget(strategy_box)
+        right_splitter.setSizes([200, 400])
+        hbox.addWidget(right_splitter)
+
+        # 우측 전략패널은 조건식 선택 전까지 비활성
+        strategy_box.setEnabled(False)
+        self._strategy_box = strategy_box
+
+    # ── 조건식 선택 ──────────────────────────────────────────────────────────
+    def _on_cond_selected(self, row):
+        if row < 0:
+            return
+        item = self.cond_list.item(row)
+        if not item:
+            return
+        name = item.text().split(" [")[0]  # 뱃지 제거
+        self.lbl_cond_name.setText(f"📋 {name}")
+        self._strategy_box.setEnabled(True)
+        # 저장된 전략이 있으면 복원
+        s = self._cond_strategies.get(name, self.DEFAULT_STRATEGY.copy())
+        self.combo_entry.setCurrentIndex(s.get("entry", 0))
+        self.spin_amount.setValue(s.get("buy_amount", 1_000_000))
+        self.spin_tp.setValue(s.get("take_profit", 5.0))
+        self.spin_sl.setValue(s.get("stop_loss", 2.0))
+        self.chk_trail.setChecked(s.get("trailing", False))
+        self.spin_trail_start.setValue(s.get("trail_start", 3.0))
+        self.spin_trail_drop.setValue(s.get("trail_drop", 1.5))
+        self.spin_max_stocks.setValue(s.get("max_stocks", 5))
+        self.spin_reenter.setValue(s.get("reenter_min", 20))
+        # 편입 종목 테이블 갱신
+        self._refresh_stock_table(name)
+
+    def _save_current_strategy(self):
+        row = self.cond_list.currentRow()
+        if row < 0:
+            return
+        name = self.cond_list.item(row).text().split(" [")[0]
+        self._cond_strategies[name] = {
+            "entry":       self.combo_entry.currentIndex(),
+            "buy_amount":  self.spin_amount.value(),
+            "take_profit": self.spin_tp.value(),
+            "stop_loss":   self.spin_sl.value(),
+            "trailing":    self.chk_trail.isChecked(),
+            "trail_start": self.spin_trail_start.value(),
+            "trail_drop":  self.spin_trail_drop.value(),
+            "max_stocks":  self.spin_max_stocks.value(),
+            "reenter_min": self.spin_reenter.value(),
+        }
+
+    def _refresh_stock_table(self, cond_name):
+        stocks = self._cond_stocks.get(cond_name, [])
+        tbl = self.tbl_stocks
+        tbl.setRowCount(0)
+        for s in stocks:
+            r = tbl.rowCount(); tbl.insertRow(r)
+            for c, val in enumerate([
+                s.get("code", ""), s.get("name", ""),
+                s.get("time", ""), s.get("price", ""), s.get("status", "편입")
+            ]):
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 4 and val == "편입":
+                    item.setForeground(QColor(C_PROFIT))
+                tbl.setItem(r, c, item)
+
+    # ── 외부 API ─────────────────────────────────────────────────────────────
     def set_conditions(self, cond_list: list):
+        """KiwoomAPI에서 받은 조건식 이름 목록으로 갱신"""
+        current = self.cond_list.currentRow()
         self.cond_list.clear()
         for name in cond_list:
             item = QListWidgetItem(name)
             item.setCheckState(Qt.Unchecked)
             self.cond_list.addItem(item)
+        if current >= 0:
+            self.cond_list.setCurrentRow(min(current, self.cond_list.count() - 1))
 
     def get_selected_conditions(self):
         result = []
         for i in range(self.cond_list.count()):
             item = self.cond_list.item(i)
             if item.checkState() == Qt.Checked:
-                result.append(item.text())
+                result.append(item.text().split(" [")[0])
         return result
+
+    def add_stock_entry(self, cond_name: str, code: str, name: str,
+                        price: str = "", status: str = "편입"):
+        """실시간 편입 종목 추가 (조건검색 이벤트에서 호출)"""
+        import datetime
+        entry = {
+            "code": code, "name": name,
+            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+            "price": price, "status": status,
+        }
+        stocks = self._cond_stocks.setdefault(cond_name, [])
+        # 이탈이면 기존 항목 status 변경
+        if status == "이탈":
+            for s in stocks:
+                if s["code"] == code:
+                    s["status"] = "이탈"
+                    break
+        else:
+            # 중복 방지
+            if not any(s["code"] == code for s in stocks):
+                stocks.insert(0, entry)
+        # 뱃지 업데이트: 조건식 목록에 편입 종목수 표시
+        active = sum(1 for s in stocks if s["status"] == "편입")
+        for i in range(self.cond_list.count()):
+            item = self.cond_list.item(i)
+            if item.text().split(" [")[0] == cond_name:
+                item.setText(f"{cond_name} [{active}]" if active else cond_name)
+                break
+        # 현재 선택된 조건식이면 테이블 즉시 갱신
+        cur = self.cond_list.currentRow()
+        if cur >= 0:
+            cur_name = self.cond_list.item(cur).text().split(" [")[0]
+            if cur_name == cond_name:
+                self._refresh_stock_table(cond_name)
+
+    def get_strategy(self, cond_name: str) -> dict:
+        """조건식별 전략 반환 (없으면 기본값)"""
+        return self._cond_strategies.get(cond_name, self.DEFAULT_STRATEGY.copy())
+
+    # 전체 공통 설정 호환 (기존 _collect_settings 에서 사용)
+    @property
+    def spin_ratio(self):
+        """호환성: 예수금 비율 — 기본 5% 고정 spinbox 반환"""
+        if not hasattr(self, "_spin_ratio_compat"):
+            self._spin_ratio_compat = QDoubleSpinBox()
+            self._spin_ratio_compat.setValue(5.0)
+        return self._spin_ratio_compat
 
 
 # ── 탭 3 : 종목별 독립 매매 ───────────────────────────────────────────────────
@@ -1795,6 +1950,8 @@ class MainWindow(QMainWindow):
             data = self._collect_settings()
             # 종목별 매매 탭 종목 목록 저장
             data["individual_stocks"] = self._get_individual_stocks()
+            # 조건식별 전략 저장
+            data["cond_strategies"] = self.tab_condition._cond_strategies
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             self.statusBar().showMessage("설정 저장 완료", 3000)
@@ -1858,11 +2015,13 @@ class MainWindow(QMainWindow):
                 s = json.load(f)
             ct = self.tab_condition
             sl = self.tab_stoploss
-            # _collect_settings() 저장 형식과 동일한 키 사용 (소수 → % 환산)
+            # 조건식 매매 탭 공통 설정
             ct.spin_amount.setValue(s.get("buy_amount", 1_000_000))
-            ct.spin_ratio.setValue(s.get("amount_ratio", 5))
             ct.spin_max_stocks.setValue(s.get("stock_count", 5))
             ct.spin_reenter.setValue(s.get("reenter_min", 20))
+            # 조건식별 전략 복원
+            ct._cond_strategies = s.get("cond_strategies", {})
+            # 손익/청산 탭
             sl.spin_tp.setValue(s.get("take_profit", 0.03) * 100.0)
             sl.spin_sl.setValue(s.get("stop_loss", 0.02) * 100.0)
             sl.chk_trailing.setChecked(s.get("trailing", False))
@@ -2258,6 +2417,19 @@ def run_with_kiwoom():
             for name in cond_names:
                 win.sidebar.cond_active_list.addItem(name)
             win._log(f"조건검색식 {len(cond_names)}개 로드 완료", 2)
+
+            # 실시간 조건 편입/이탈 → 탭 미리보기 연동
+            def _on_real_cond(code, event_type, cond_name, cond_index):
+                status = "편입" if event_type == "I" else "이탈"
+                try:
+                    raw_name = kiwoom.dynamicCall(
+                        "GetMasterCodeName(QString)", code).strip() or code
+                except Exception:
+                    raw_name = code
+                win.tab_condition.add_stock_entry(cond_name, code, raw_name,
+                                                  status=status)
+                win._log(f"[조건:{cond_name}] {raw_name}({code}) {status}", 2)
+            kiwoom.register_real_condition_callback(_on_real_cond)
         except Exception as e:
             win._log(f"조건검색식 로드 실패: {e}", 2)
 
