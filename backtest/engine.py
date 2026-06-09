@@ -39,7 +39,7 @@ class BacktestEngine:
             window = df.iloc[:i + 1]
             row = df.iloc[i]
             price = row["close"]
-            date = row["date"]
+            date = row["date"] if "date" in row.index else str(row.name)[:10]
 
             if i < min_bars:
                 equity_curve.append(cash)
@@ -113,7 +113,10 @@ class BacktestEngine:
         return {
             "code": code,
             "strategy": self.strategy.name,
-            "period": (str(df.iloc[0]["date"])[:10], str(df.iloc[-1]["date"])[:10]),
+            "period": (
+            str(df.iloc[0]["date"] if "date" in df.columns else df.index[0])[:10],
+            str(df.iloc[-1]["date"] if "date" in df.columns else df.index[-1])[:10],
+        ),
             "initial_cash": self.initial_cash,
             "final_equity": int(final_equity),
             "total_return": round(total_return, 4),
