@@ -66,7 +66,37 @@ def parse_args():
                         help="HTS GUI 실행 (키움 실제 연동)")
     parser.add_argument("--demo", action="store_true",
                         help="HTS GUI 데모 모드 (키움 연결 없이 화면만)")
+    parser.add_argument("--balance", action="store_true",
+                        help="모든 계좌의 예수금/평가금액을 출력하고 종료 (진단용)")
     return parser.parse_args()
+
+
+def run_balance_check():
+    """모든 계좌의 예수금(opw00001) + 평가잔고(opw00018)를 출력하고 종료"""
+    app = QApplication(sys.argv)  # noqa: F841  (OCX 사용 위해 필요)
+    kiwoom = KiwoomAPI()
+    kiwoom.login()
+    mdata = MarketDataAPI(kiwoom)
+    accounts = kiwoom.get_account_list()
+    print("\n" + "=" * 60)
+    print(f"보유 계좌 {len(accounts)}개: {accounts}")
+    print("=" * 60)
+    for acc in accounts:
+        print(f"\n[계좌 {acc}]")
+        try:
+            dep = mdata.get_deposit(acc)
+            print(f"  예수금(opw00001): 예수금={dep['deposit']:,}원, "
+                  f"주문가능={dep['available']:,}원")
+        except Exception as e:
+            print(f"  예수금 조회 실패: {e}")
+        try:
+            bal = mdata.get_account_balance(acc)
+            s = bal["summary"]
+            print(f"  평가잔고(opw00018): 총평가={s['total_eval']:,}원, "
+                  f"주문가능={s['available']:,}원, 보유종목={len(bal['holdings'])}개")
+        except Exception as e:
+            print(f"  평가잔고 조회 실패: {e}")
+    print("\n" + "=" * 60)
 
 
 def run_analyze(code):
@@ -84,6 +114,11 @@ def run_analyze(code):
 
 def main():
     args = parse_args()
+
+    # 계좌 잔고 진단 모드 (출력 후 종료)
+    if args.balance:
+        run_balance_check()
+        return
 
     # 개별 종목 분석 모드 (분석 후 종료)
     if args.analyze:
