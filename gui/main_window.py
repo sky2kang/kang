@@ -1322,7 +1322,7 @@ class MainWindow(QMainWindow):
         m_trade.addAction("매매 정지", self._on_stop)
 
         m_view = mb.addMenu("보기(&V)")
-        m_view.addAction("잔고 새로고침", self._refresh_balance)
+        m_view.addAction("잔고 새로고침", lambda: self._refresh_balance(force=True))
         m_view.addAction("로그 지우기", self._clear_logs)
 
         m_help = mb.addMenu("도움말(&H)")
@@ -1337,7 +1337,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(tb)
 
         for label, slot in [
-            ("잔고조회", self._refresh_balance),
+            ("잔고조회", lambda _=False: self._refresh_balance(force=True)),
             ("조건식로드", self._load_conditions),
             ("로그지우기", self._clear_logs),
         ]:
@@ -1417,7 +1417,7 @@ class MainWindow(QMainWindow):
         self.header.btn_start.clicked.connect(self._on_start)
         self.header.btn_stop.clicked.connect(self._on_stop)
         self.tab_dashboard.btn_sell_all.clicked.connect(self._emergency_liquidate)
-        self.tab_dashboard.btn_refresh.clicked.connect(lambda: self._refresh_balance(force=True))
+        self.tab_dashboard.btn_refresh.clicked.connect(lambda _=False: self._refresh_balance(force=True))
         self.tab_stoploss.btn_liquidate.clicked.connect(self._emergency_liquidate)
         self.tab_condition.btn_load_cond.clicked.connect(self._load_conditions)
         self.tab_backtest.btn_save_chart.clicked.connect(self._save_bt_chart)
