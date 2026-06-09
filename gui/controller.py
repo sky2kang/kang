@@ -173,7 +173,7 @@ class TradingController:
         if self._market_data and self._account:
             try:
                 bal = self._market_data.get_account_balance(
-                    self._account, self._is_simul
+                    self._account, is_simul=self._is_simul
                 )
                 summary = bal.get("summary", {})
                 account_info = {
