@@ -72,35 +72,55 @@ def parse_args():
 
 
 def run_balance_check():
-    """모든 계좌의 예수금(opw00001) raw 값을 출력하고 종료 (진단용)"""
+    """모든 계좌의 예수금(opw00001/opw00018) raw 값을 출력하고 종료 (진단용)"""
     import time
+    from config.settings import ACCOUNT_PASSWORD
     app = QApplication(sys.argv)  # noqa: F841  (OCX 사용 위해 필요)
     kiwoom = KiwoomAPI()
     kiwoom.login()
     accounts = kiwoom.get_account_list()
+    pw = ACCOUNT_PASSWORD
     print("\n" + "=" * 60)
     print(f"보유 계좌 {len(accounts)}개: {accounts}")
+    print(f"사용 비밀번호(.env KIWOOM_ACCOUNT_PW): {pw!r}")
     print("=" * 60)
 
-    # opw00001 예수금상세현황 - 여러 레코드명/필드로 raw 값 확인
     for acc in accounts:
+        # --- opw00001 예수금상세현황 ---
         print(f"\n[계좌 {acc}] opw00001 예수금상세현황")
         time.sleep(0.6)  # TR 과부하(-211) 방지
         kiwoom.set_input_value("계좌번호", acc)
-        kiwoom.set_input_value("비밀번호", "0000")
+        kiwoom.set_input_value("비밀번호", pw)
         kiwoom.set_input_value("비밀번호입력매체구분", "00")
         kiwoom.set_input_value("조회구분", "2")
         ret = kiwoom.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
         if ret != 0:
             print(f"  TR 요청 실패 ret={ret}")
-            continue
-        # 레코드명 후보별로 주요 필드 raw 출력
-        for rec in ("예수금상세현황", ""):
+        else:
             for field in ("예수금", "주문가능금액", "출금가능금액", "추정예탁자산"):
-                raw = kiwoom.get_comm_data("opw00001", rec, 0, field)
-                print(f"  rec={rec!r:18} {field}={raw!r}")
+                raw = kiwoom.get_comm_data("opw00001", "예수금상세현황", 0, field)
+                print(f"  예수금상세현황 {field}={raw!r}")
+
+        # --- opw00018 계좌평가잔고내역 (단건 합계) ---
+        print(f"[계좌 {acc}] opw00018 계좌평가잔고내역")
+        time.sleep(0.6)
+        kiwoom.set_input_value("계좌번호", acc)
+        kiwoom.set_input_value("비밀번호", pw)
+        kiwoom.set_input_value("비밀번호입력매체구분", "00")
+        kiwoom.set_input_value("조회구분", "2")
+        ret = kiwoom.comm_rq_data("계좌잔고조회", "opw00018", 0, "2000")
+        if ret != 0:
+            print(f"  TR 요청 실패 ret={ret}")
+        else:
+            for field in ("예수금", "총평가금액", "추정예탁자산", "주문가능금액",
+                          "총매입금액", "d+2추정예수금"):
+                raw = kiwoom.get_comm_data("opw00018", "계좌평가잔고내역", 0, field)
+                print(f"  계좌평가잔고내역 {field}={raw!r}")
+            cnt = kiwoom.get_repeat_cnt("opw00018", "계좌평가잔고내역")
+            print(f"  보유종목 반복건수={cnt}")
     print("\n" + "=" * 60)
-    print("위 raw 값 중 0이 아닌 숫자가 보이는 rec/field 조합을 알려주세요.")
+    print("0이 아닌 숫자가 보이면 비밀번호/계좌가 맞는 것입니다.")
+    print("모두 빈 값이면 KIWOOM_ACCOUNT_PW 가 틀렸거나 계좌비밀번호 미등록입니다.")
     print("=" * 60)
 
 
