@@ -30,12 +30,24 @@ class MarketDataAPI:
     def get_stock_info(self, code):
         """종목 현재가 및 기본 정보 조회"""
         self.api.set_input_value("종목코드", code)
-        self.api.comm_rq_data("주식기본정보", "opt10001", 0, "1000")
+        self.api.comm_rq_data(
+            "주식기본정보", "opt10001", 0, "1000",
+            single_fields=["현재가", "거래량", "등락율"],
+        )
+        single = self.api.tr_data.get("single", {})
 
-        raw_price = self.api.get_comm_data("opt10001", "주식기본정보", 0, "현재가")
-        price = int(raw_price.replace("-", "").replace("+", ""))
-        volume = int(self.api.get_comm_data("opt10001", "주식기본정보", 0, "거래량").replace(",", ""))
-        change_rate = float(self.api.get_comm_data("opt10001", "주식기본정보", 0, "등락율").replace("%", ""))
+        def _clean(s):
+            return (s or "").replace(",", "").replace("+", "").replace("%", "").strip()
+
+        price_raw = _clean(single.get("현재가", "0"))
+        price = abs(int(price_raw)) if price_raw else 0
+        volume_raw = _clean(single.get("거래량", "0"))
+        volume = abs(int(volume_raw)) if volume_raw else 0
+        rate_raw = _clean(single.get("등락율", "0"))
+        try:
+            change_rate = float(rate_raw) if rate_raw else 0.0
+        except ValueError:
+            change_rate = 0.0
 
         return {
             "code": code,
@@ -63,26 +75,21 @@ class MarketDataAPI:
 
         rows = []
         prev_next = 0
+        ohlcv_fields = ["일자", "시가", "고가", "저가", "현재가", "거래량"]
 
         while True:
-            self.api.comm_rq_data("주식일봉차트조회", "opt10081", prev_next, "1001")
-            cnt = self.api.get_repeat_cnt("opt10081", "주식일봉차트조회")
-
-            for i in range(cnt):
-                date = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "일자")
-                open_p = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "시가")
-                high = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "고가")
-                low = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "저가")
-                close = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "현재가")
-                volume = self.api.get_comm_data("opt10081", "주식일봉차트조회", i, "거래량")
-
+            self.api.comm_rq_data(
+                "주식일봉차트조회", "opt10081", prev_next, "1001",
+                multi_fields=ohlcv_fields,
+            )
+            for row in self.api.tr_data.get("multi", []):
                 rows.append({
-                    "date": date.strip(),
-                    "open": abs(int(open_p)),
-                    "high": abs(int(high)),
-                    "low": abs(int(low)),
-                    "close": abs(int(close)),
-                    "volume": abs(int(volume)),
+                    "date": row.get("일자", "").strip(),
+                    "open": abs(int(row.get("시가", "0") or "0")),
+                    "high": abs(int(row.get("고가", "0") or "0")),
+                    "low": abs(int(row.get("저가", "0") or "0")),
+                    "close": abs(int(row.get("현재가", "0") or "0")),
+                    "volume": abs(int(row.get("거래량", "0") or "0")),
                 })
 
             prev_next = self.api.tr_data.get("prev_next", "0")
@@ -103,16 +110,17 @@ class MarketDataAPI:
         self.api.set_input_value("종목코드", code)
         self.api.set_input_value("틱범위", str(tick_scope))
         self.api.set_input_value("수정주가구분", "1")
-        self.api.comm_rq_data("주식분봉차트조회", "opt10080", 0, "1002")
-
-        cnt = self.api.get_repeat_cnt("opt10080", "주식분봉차트조회")
+        self.api.comm_rq_data(
+            "주식분봉차트조회", "opt10080", 0, "1002",
+            multi_fields=["체결시간", "현재가", "거래량"],
+        )
         rows = []
-        for i in range(cnt):
-            dt = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "체결시간")
-            close = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "현재가")
-            volume = self.api.get_comm_data("opt10080", "주식분봉차트조회", i, "거래량")
-            rows.append({"datetime": dt.strip(), "close": abs(int(close)),
-                         "volume": abs(int(volume))})
+        for row in self.api.tr_data.get("multi", []):
+            rows.append({
+                "datetime": row.get("체결시간", "").strip(),
+                "close": abs(int(row.get("현재가", "0") or "0")),
+                "volume": abs(int(row.get("거래량", "0") or "0")),
+            })
 
         df = pd.DataFrame(rows)
         df["datetime"] = pd.to_datetime(df["datetime"], format="%Y%m%d%H%M%S")
