@@ -1351,8 +1351,16 @@ class MainWindow(QMainWindow):
         self.tab_backtest.run_requested.connect(self._run_backtest)
         self.tab_screening.btn_screen.clicked.connect(self._run_screening)
         self.tab_screening.btn_sc_export.clicked.connect(self._export_screening)
+        self.tab_screening.btn_add_watch.clicked.connect(self._add_watch_from_screen)
         self.tab_analysis.btn_analyze.clicked.connect(self._run_analysis)
         self.tab_scheduler.btn_save_sched.clicked.connect(self._save_settings)
+        self.tab_individual.btn_add.clicked.connect(self._add_individual_stock)
+        self.tab_individual.btn_del.clicked.connect(self._del_individual_stock)
+        self.tab_individual.btn_import.clicked.connect(self._import_individual_csv)
+        # 탭 전환 시 당일 거래내역 갱신
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        # 시작 시 관심종목 불러오기
+        self._load_watchlist()
 
     # ── 로그 테일 ────────────────────────────────────────────────────────────
     def _start_log_tail(self):
@@ -1693,7 +1701,143 @@ class MainWindow(QMainWindow):
             "Python + PyQt5"
         )
 
+    # ── 탭 전환 이벤트 ───────────────────────────────────────────────────────
+    def _on_tab_changed(self, idx):
+        if self.tabs.widget(idx) is self.tab_dashboard:
+            self._refresh_trades()
+
+    # ── 당일 체결 내역 갱신 ──────────────────────────────────────────────────
+    def _refresh_trades(self):
+        if self._ctrl is None:
+            return
+        try:
+            trader = getattr(self._ctrl, "_trader", None)
+            if trader is None or not hasattr(trader, "db"):
+                return
+            rows = trader.db.get_today_orders()
+            tbl = self.tab_dashboard.tbl_trades
+            tbl.setRowCount(0)
+            for row in rows:
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                # orders 테이블: timestamp, code, name, order_type, qty, price, amount, fee, profit
+                col_vals = [
+                    str(row[0])[:19] if row[0] else "",   # timestamp
+                    str(row[2]) if len(row) > 2 else "",  # name
+                    str(row[3]) if len(row) > 3 else "",  # order_type
+                    str(row[4]) if len(row) > 4 else "",  # qty
+                    f"{int(row[5]):,.0f}" if len(row) > 5 and row[5] else "",  # price
+                    f"{int(row[6]):,.0f}" if len(row) > 6 and row[6] else "",  # amount
+                    f"{int(row[7]):,.0f}" if len(row) > 7 and row[7] else "",  # fee
+                    f"{int(row[8]):+,.0f}" if len(row) > 8 and row[8] else "",  # profit
+                ]
+                for c, val in enumerate(col_vals):
+                    item = QTableWidgetItem(val)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if c == 7 and val:
+                        try:
+                            item.setForeground(
+                                QColor(C_PROFIT) if int(row[8]) >= 0 else QColor(C_LOSS)
+                            )
+                        except (ValueError, TypeError):
+                            pass
+                    tbl.setItem(r, c, item)
+        except Exception as e:
+            logger.debug("체결내역 갱신 실패: %s", e)
+
+    # ── 관심종목 영구 저장 ───────────────────────────────────────────────────
+    _WATCHLIST_PATH = os.path.join("config", "watchlist.json")
+
+    def _load_watchlist(self):
+        import json
+        if not os.path.exists(self._WATCHLIST_PATH):
+            return
+        try:
+            with open(self._WATCHLIST_PATH, encoding="utf-8") as f:
+                items = json.load(f)
+            self.sidebar.watch_list.clear()
+            for it in items:
+                self.sidebar.watch_list.addItem(f"{it['code']} {it.get('name','')}")
+        except Exception as e:
+            logger.debug("관심종목 불러오기 실패: %s", e)
+
+    def _save_watchlist(self):
+        import json
+        items = []
+        for i in range(self.sidebar.watch_list.count()):
+            text = self.sidebar.watch_list.item(i).text()
+            parts = text.split(" ", 1)
+            items.append({"code": parts[0], "name": parts[1] if len(parts) > 1 else ""})
+        os.makedirs("config", exist_ok=True)
+        try:
+            with open(self._WATCHLIST_PATH, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.debug("관심종목 저장 실패: %s", e)
+
+    def _add_watch_from_screen(self):
+        t = self.tab_screening.tbl_screen
+        rows = list({idx.row() for idx in t.selectedIndexes()})
+        for r in rows:
+            code = t.item(r, 0).text() if t.item(r, 0) else ""
+            name = t.item(r, 1).text() if t.item(r, 1) else ""
+            if code:
+                self.sidebar.watch_list.addItem(f"{code} {name}")
+        self._save_watchlist()
+
+    # ── 종목별 매매 탭 헬퍼 ─────────────────────────────────────────────────
+    def _add_individual_stock(self):
+        code = self.tab_individual.edit_code.text().strip()
+        if not code:
+            return
+        name = code
+        if self._mdata:
+            try:
+                kiwoom = getattr(self._mdata, "api", None)
+                if kiwoom:
+                    name = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip() or code
+            except Exception:
+                pass
+        tbl = self.tab_individual.tbl
+        r = tbl.rowCount()
+        tbl.insertRow(r)
+        chk = QTableWidgetItem()
+        chk.setCheckState(Qt.Checked)
+        tbl.setItem(r, 0, chk)
+        for c, val in enumerate([code, name, "--", "--", "--", "1,000,000", "X", "--", "대기"], 1):
+            item = QTableWidgetItem(val)
+            item.setTextAlignment(Qt.AlignCenter)
+            tbl.setItem(r, c, item)
+        self.tab_individual.edit_code.clear()
+
+    def _del_individual_stock(self):
+        rows = sorted(
+            {idx.row() for idx in self.tab_individual.tbl.selectedIndexes()},
+            reverse=True
+        )
+        for r in rows:
+            self.tab_individual.tbl.removeRow(r)
+
+    def _import_individual_csv(self):
+        path, _ = QFileDialog.getOpenFileName(self, "CSV 불러오기", "", "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            import csv
+            with open(path, encoding="utf-8-sig") as f:
+                reader = csv.reader(f)
+                next(reader, None)  # 헤더 skip
+                for row in reader:
+                    if row:
+                        self.tab_individual.edit_code.setText(row[0].strip())
+                        self._add_individual_stock()
+        except Exception as e:
+            QMessageBox.critical(self, "불러오기 오류", str(e))
+
+    # ─────────────────────────────────────────────────────────────────────────
     def closeEvent(self, event):
+        self._save_watchlist()
+        self._save_settings()
         if self._ctrl:
             self._ctrl.stop()
         if hasattr(self, "_log_thread"):
