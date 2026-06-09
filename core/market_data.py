@@ -4,6 +4,11 @@
 import pandas as pd
 from utils.logger import get_logger
 
+try:
+    from config.settings import ACCOUNT_PASSWORD
+except Exception:
+    ACCOUNT_PASSWORD = "0000"
+
 logger = get_logger(__name__)
 
 # 주요 FID 상수
@@ -116,7 +121,7 @@ class MarketDataAPI:
     # -------------------------------------------------------------------------
     # 예수금 상세 조회 (opw00001) - 보유종목이 없어도 예수금/주문가능금액 반환
     # -------------------------------------------------------------------------
-    def get_deposit(self, account, password="0000"):
+    def get_deposit(self, account, password=ACCOUNT_PASSWORD):
         """
         예수금상세현황요청. 보유종목 유무와 무관하게 예수금/주문가능금액 반환.
         반환: {deposit: int, available: int}
@@ -146,7 +151,7 @@ class MarketDataAPI:
     # -------------------------------------------------------------------------
     # 계좌 잔고 조회 (opw00018)
     # -------------------------------------------------------------------------
-    def get_account_balance(self, account, password="0000", is_simul=True):
+    def get_account_balance(self, account, password=ACCOUNT_PASSWORD, is_simul=True):
         """
         계좌 잔고 조회
         반환: {summary: dict, holdings: DataFrame}

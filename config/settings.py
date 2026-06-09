@@ -8,6 +8,7 @@ load_dotenv()
 
 # 계좌 설정
 ACCOUNT_NUMBER = os.getenv("KIWOOM_ACCOUNT", "")  # 계좌번호 (환경변수로 관리)
+ACCOUNT_PASSWORD = os.getenv("KIWOOM_ACCOUNT_PW", "0000")  # 계좌 비밀번호 (모의 기본 0000)
 IS_SIMUL = os.getenv("KIWOOM_SIMUL", "True") == "True"  # True: 모의투자, False: 실거래
 
 # 매매 설정 (지표 전략 모드 기본값)
