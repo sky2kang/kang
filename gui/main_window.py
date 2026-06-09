@@ -358,11 +358,13 @@ class _DashboardTab(QWidget):
         v3.addWidget(self.tbl_trades)
         vbox.addWidget(g3)
 
-    def update_balance(self, data: dict):
-        total = data.get("total_eval", 0)
-        profit = data.get("total_profit", 0)
-        avail = data.get("available", 0)
-        rate = (profit / (total - profit) * 100) if (total - profit) != 0 else 0
+    def update_balance(self, summary: dict):
+        """summary: {total_eval, total_profit_rate, available} (MarketDataAPI 반환 형식)"""
+        total = summary.get("total_eval", 0)
+        rate = summary.get("total_profit_rate", 0.0)
+        avail = summary.get("available", 0)
+        # 수익 금액 = total_eval × rate / (100 + rate)  (근사)
+        profit = int(total * rate / (100 + rate)) if (100 + rate) != 0 else 0
         self._cards["total"].setText(f"{total:,.0f}원")
         self._cards["profit"].setText(f"{profit:+,.0f}원")
         self._cards["profit"].setObjectName("labelProfit" if profit >= 0 else "labelLoss")
@@ -370,18 +372,27 @@ class _DashboardTab(QWidget):
         self._cards["avail"].setText(f"{avail:,.0f}원")
 
     def update_holdings(self, holdings: list):
+        """holdings: list of dict (MarketDataAPI opw00018 반환 형식)
+           키: code, name, qty, avg_price, profit_rate
+           price / eval_amount 가 없으면 avg_price 로 대체
+        """
         self.tbl_holdings.setRowCount(0)
         for h in holdings:
             r = self.tbl_holdings.rowCount()
             self.tbl_holdings.insertRow(r)
-            profit_rate = h.get("profit_rate", 0)
+            profit_rate = h.get("profit_rate", 0.0)
+            qty = h.get("qty", 0)
+            avg_price = h.get("avg_price", 0)
+            price = h.get("price", avg_price)               # 현재가 없으면 평단가로 대체
+            eval_amount = h.get("eval_amount", qty * price)
+            profit_amt = h.get("profit", int(eval_amount - qty * avg_price))
             items = [
                 h.get("code", ""), h.get("name", ""),
-                str(h.get("qty", 0)),
-                f"{h.get('avg_price', 0):,.0f}",
-                f"{h.get('price', 0):,.0f}",
-                f"{h.get('eval_amount', 0):,.0f}",
-                f"{h.get('profit', 0):+,.0f}",
+                str(qty),
+                f"{avg_price:,.0f}",
+                f"{price:,.0f}",
+                f"{eval_amount:,.0f}",
+                f"{profit_amt:+,.0f}",
                 f"{profit_rate:+.2f}%",
             ]
             for c, val in enumerate(items):
@@ -1195,7 +1206,10 @@ class MainWindow(QMainWindow):
     def __init__(self, controller=None, market_data_api=None, parent=None):
         super().__init__(parent)
         self._ctrl = controller
-        self._mdata = market_data_api
+        # controller 가 있으면 내부 mdata를 참조, 없으면 직접 주입된 것 사용
+        self._mdata = market_data_api or (
+            getattr(controller, "_market_data", None) if controller else None
+        )
         self._bt_result = None
 
         self.setWindowTitle("AutoTrader — HTS 자동매매")
@@ -1386,16 +1400,50 @@ class MainWindow(QMainWindow):
 
     # ── 잔고 새로고침 ────────────────────────────────────────────────────────
     def _refresh_balance(self):
+        # controller 경유 (연결된 경우)
+        if self._ctrl:
+            try:
+                status = self._ctrl.get_status()
+                summary = status.get("account", {})
+                holdings = status.get("holdings", [])
+                safety = status.get("safety", {})
+
+                self.tab_dashboard.update_balance(summary)
+                self.tab_dashboard.update_holdings(holdings)
+
+                avail = summary.get("available", 0)
+                rate = summary.get("total_profit_rate", 0.0)
+                self.header.lbl_balance.setText(f"예수금: {avail:,.0f}원")
+                self.header.lbl_profit.setText(
+                    f"수익률: {rate:+.2f}%"
+                )
+
+                # 안전장치 상태 반영
+                if safety.get("halted"):
+                    self.status_mode.setText(f"⚠ 매매중단: {safety.get('halt_reason','')}")
+                orders = safety.get("order_count", 0)
+                max_ord = safety.get("max_orders", 0)
+                if max_ord:
+                    self.status_orders.setText(f"오늘 주문: {orders}/{max_ord}회")
+            except Exception as e:
+                logger.warning("잔고 조회 실패(controller): %s", e)
+            return
+
+        # mdata 직접 조회 (controller 없는 경우)
         if self._mdata is None:
             return
         try:
-            data = self._mdata.get_account_balance()
-            if data:
-                self.tab_dashboard.update_balance(data)
-                holdings = data.get("holdings", [])
-                self.tab_dashboard.update_holdings(holdings)
-                avail = data.get("available", 0)
-                self.header.lbl_balance.setText(f"예수금: {avail:,.0f}원")
+            account = getattr(self._ctrl, "_account", None) if self._ctrl else None
+            if account is None:
+                return
+            data = self._mdata.get_account_balance(account)
+            summary = data.get("summary", {})
+            df_h = data.get("holdings")
+            holdings = df_h.to_dict("records") if df_h is not None and not df_h.empty else []
+            self.tab_dashboard.update_balance(summary)
+            self.tab_dashboard.update_holdings(holdings)
+            avail = summary.get("available", 0)
+            self.header.lbl_balance.setText(f"예수금: {avail:,.0f}원")
         except Exception as e:
             logger.warning("잔고 조회 실패: %s", e)
 
@@ -1530,29 +1578,28 @@ class MainWindow(QMainWindow):
         now = datetime.datetime.now().time()
         sched = self.tab_scheduler
 
+        def _qt_to_pytime(qt):
+            return datetime.time(qt.hour(), qt.minute())
+
+        def _within(qt, secs=35):
+            target = _qt_to_pytime(qt)
+            delta = abs((
+                datetime.datetime.combine(datetime.date.today(), now)
+                - datetime.datetime.combine(datetime.date.today(), target)
+            ).total_seconds())
+            return delta < secs
+
         if sched.chk_auto_start.isChecked():
-            t = sched.time_start.time()
-            start_t = datetime.time(t.hour(), t.minute())
-            if abs((datetime.datetime.combine(datetime.date.today(), now)
-                    - datetime.datetime.combine(datetime.date.today(), start_t)
-                    ).total_seconds()) < 35:
+            if _within(sched.time_start.time()):
                 if not self.header.btn_stop.isEnabled():
                     self._on_start()
 
         if sched.chk_eod_sell.isChecked():
-            t = sched.time_close.time()
-            close_t = datetime.time(t.hour(), t.minute())
-            if abs((datetime.datetime.combine(datetime.date.today(), now)
-                    - datetime.datetime.combine(datetime.date.today(), close_t)
-                    ).total_seconds()) < 35:
+            if _within(sched.time_close.time()):
                 self._emergency_liquidate()
 
         if sched.chk_auto_quit.isChecked():
-            t = sched.time_quit.time()
-            quit_t = datetime.time(t.hour(), t.minute())
-            if abs((datetime.datetime.combine(datetime.date.today(), now)
-                    - datetime.datetime.combine(datetime.date.today(), quit_t)
-                    ).total_seconds()) < 35:
+            if _within(sched.time_quit.time()):
                 if sched.chk_pc_shutdown.isChecked():
                     import subprocess
                     subprocess.Popen("shutdown /s /t 60", shell=True)
@@ -1560,20 +1607,27 @@ class MainWindow(QMainWindow):
 
     # ── 설정 저장 / 불러오기 ─────────────────────────────────────────────────
     def _collect_settings(self) -> dict:
+        """TradingController.start() 가 기대하는 키 형식으로 반환"""
         ct = self.tab_condition
         sl = self.tab_stoploss
+        conds = ct.get_selected_conditions()
+        # 전략 결정: 조건식이 체크되면 '조건검색식', 아니면 MA
+        strategy = "조건검색식" if conds else "이동평균(MA)"
         return {
-            "conditions": ct.get_selected_conditions(),
-            "amount": ct.spin_amount.value(),
-            "ratio": ct.spin_ratio.value(),
-            "max_stocks": ct.spin_max_stocks.value(),
+            # controller.start() 키
+            "buy_amount": ct.spin_amount.value(),
+            "stock_count": ct.spin_max_stocks.value(),
+            "stop_loss": sl.spin_sl.value() / 100.0,      # % → 소수
+            "take_profit": sl.spin_tp.value() / 100.0,
+            "strategy": strategy,
+            "condition_name": ",".join(conds),
+            # 추가 설정 (SafetyGuard 등 확장 시 사용)
+            "amount_ratio": ct.spin_ratio.value(),
             "reenter_min": ct.spin_reenter.value(),
-            "take_profit": sl.spin_tp.value(),
-            "stop_loss": sl.spin_sl.value(),
             "trailing": sl.chk_trailing.isChecked(),
-            "trail_start": sl.spin_trail_start.value(),
-            "trail_drop": sl.spin_trail_drop.value(),
-            "daily_loss_limit": sl.spin_daily_loss.value(),
+            "trail_start": sl.spin_trail_start.value() / 100.0,
+            "trail_drop": sl.spin_trail_drop.value() / 100.0,
+            "daily_loss_limit": sl.spin_daily_loss.value() / 100.0,
             "max_orders": sl.spin_max_orders.value(),
         }
 
@@ -1654,22 +1708,22 @@ def run_standalone():
     win = MainWindow()
     win.show()
 
-    # 데모: 임시 잔고 데이터 표시
-    demo_balance = {
+    # 데모: MarketDataAPI와 동일한 summary 형식
+    demo_summary = {
         "total_eval": 12_345_678,
-        "total_profit": 345_678,
+        "total_profit_rate": 2.87,
         "available": 3_000_000,
-        "holdings": [
-            {"code": "005930", "name": "삼성전자", "qty": 10,
-             "avg_price": 72000, "price": 75000,
-             "eval_amount": 750000, "profit": 30000, "profit_rate": 4.17},
-            {"code": "035420", "name": "NAVER", "qty": 2,
-             "avg_price": 180000, "price": 172000,
-             "eval_amount": 344000, "profit": -16000, "profit_rate": -4.44},
-        ]
     }
-    win.tab_dashboard.update_balance(demo_balance)
-    win.tab_dashboard.update_holdings(demo_balance["holdings"])
+    demo_holdings = [
+        {"code": "005930", "name": "삼성전자", "qty": 10,
+         "avg_price": 72000, "price": 75000,
+         "eval_amount": 750_000, "profit": 30_000, "profit_rate": 4.17},
+        {"code": "035420", "name": "NAVER", "qty": 2,
+         "avg_price": 180_000, "price": 172_000,
+         "eval_amount": 344_000, "profit": -16_000, "profit_rate": -4.44},
+    ]
+    win.tab_dashboard.update_balance(demo_summary)
+    win.tab_dashboard.update_holdings(demo_holdings)
     win.header.set_api_connected(False)
 
     # 데모 조건식
