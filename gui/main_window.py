@@ -1417,7 +1417,7 @@ class MainWindow(QMainWindow):
         self.header.btn_start.clicked.connect(self._on_start)
         self.header.btn_stop.clicked.connect(self._on_stop)
         self.tab_dashboard.btn_sell_all.clicked.connect(self._emergency_liquidate)
-        self.tab_dashboard.btn_refresh.clicked.connect(self._refresh_balance)
+        self.tab_dashboard.btn_refresh.clicked.connect(lambda: self._refresh_balance(force=True))
         self.tab_stoploss.btn_liquidate.clicked.connect(self._emergency_liquidate)
         self.tab_condition.btn_load_cond.clicked.connect(self._load_conditions)
         self.tab_backtest.btn_save_chart.clicked.connect(self._save_bt_chart)
@@ -1480,11 +1480,13 @@ class MainWindow(QMainWindow):
             self._log("⚠ 긴급 전체 청산 실행", 1)
 
     # ── 잔고 새로고침 ────────────────────────────────────────────────────────
-    def _refresh_balance(self):
-        # 장 시간 외에는 조회 빈도를 더 낮춤 (불필요한 TR 절약)
-        now_h = datetime.datetime.now().hour
-        if now_h < 8 or now_h >= 16:
-            return
+    def _refresh_balance(self, force=False):
+        # 타이머 자동 조회는 장 시간 외 생략 (불필요한 TR 절약)
+        # 수동 버튼 클릭(force=True) 은 시간 무관하게 조회
+        if not force:
+            now_h = datetime.datetime.now().hour
+            if now_h < 8 or now_h >= 16:
+                return
 
         # controller 경유 (연결된 경우)
         if self._ctrl:
@@ -1919,13 +1921,24 @@ class MainWindow(QMainWindow):
     def _add_individual_stock(self):
         code = self.tab_individual.edit_code.text().strip()
         if not code:
+            # placeholder에서 가져오기
+            code = self.tab_individual.edit_code.placeholderText().replace("예: ", "").strip()
+        if not code:
             return
+        # 이미 추가된 코드면 건너뜀
+        tbl = self.tab_individual.tbl
+        for r in range(tbl.rowCount()):
+            if tbl.item(r, 1) and tbl.item(r, 1).text() == code:
+                self._log(f"이미 추가된 종목: {code}", 0)
+                return
         name = code
         if self._mdata:
             try:
                 kiwoom = getattr(self._mdata, "api", None)
                 if kiwoom:
-                    name = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip() or code
+                    fetched = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
+                    if fetched:
+                        name = fetched
             except Exception:
                 pass
         tbl = self.tab_individual.tbl
@@ -2108,7 +2121,7 @@ def run_with_kiwoom():
         def _on_account_changed(i):
             if 0 <= i < len(accounts):
                 ctrl._account = accounts[i]
-                win._refresh_balance()
+                win._refresh_balance(force=True)
         win.header.combo_account.currentIndexChanged.connect(_on_account_changed)
 
         # 조건식 로드
