@@ -72,31 +72,36 @@ def parse_args():
 
 
 def run_balance_check():
-    """모든 계좌의 예수금(opw00001) + 평가잔고(opw00018)를 출력하고 종료"""
+    """모든 계좌의 예수금(opw00001) raw 값을 출력하고 종료 (진단용)"""
+    import time
     app = QApplication(sys.argv)  # noqa: F841  (OCX 사용 위해 필요)
     kiwoom = KiwoomAPI()
     kiwoom.login()
-    mdata = MarketDataAPI(kiwoom)
     accounts = kiwoom.get_account_list()
     print("\n" + "=" * 60)
     print(f"보유 계좌 {len(accounts)}개: {accounts}")
     print("=" * 60)
+
+    # opw00001 예수금상세현황 - 여러 레코드명/필드로 raw 값 확인
     for acc in accounts:
-        print(f"\n[계좌 {acc}]")
-        try:
-            dep = mdata.get_deposit(acc)
-            print(f"  예수금(opw00001): 예수금={dep['deposit']:,}원, "
-                  f"주문가능={dep['available']:,}원")
-        except Exception as e:
-            print(f"  예수금 조회 실패: {e}")
-        try:
-            bal = mdata.get_account_balance(acc)
-            s = bal["summary"]
-            print(f"  평가잔고(opw00018): 총평가={s['total_eval']:,}원, "
-                  f"주문가능={s['available']:,}원, 보유종목={len(bal['holdings'])}개")
-        except Exception as e:
-            print(f"  평가잔고 조회 실패: {e}")
+        print(f"\n[계좌 {acc}] opw00001 예수금상세현황")
+        time.sleep(0.6)  # TR 과부하(-211) 방지
+        kiwoom.set_input_value("계좌번호", acc)
+        kiwoom.set_input_value("비밀번호", "0000")
+        kiwoom.set_input_value("비밀번호입력매체구분", "00")
+        kiwoom.set_input_value("조회구분", "2")
+        ret = kiwoom.comm_rq_data("예수금상세현황", "opw00001", 0, "2001")
+        if ret != 0:
+            print(f"  TR 요청 실패 ret={ret}")
+            continue
+        # 레코드명 후보별로 주요 필드 raw 출력
+        for rec in ("예수금상세현황", ""):
+            for field in ("예수금", "주문가능금액", "출금가능금액", "추정예탁자산"):
+                raw = kiwoom.get_comm_data("opw00001", rec, 0, field)
+                print(f"  rec={rec!r:18} {field}={raw!r}")
     print("\n" + "=" * 60)
+    print("위 raw 값 중 0이 아닌 숫자가 보이는 rec/field 조합을 알려주세요.")
+    print("=" * 60)
 
 
 def run_analyze(code):
