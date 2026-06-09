@@ -68,7 +68,32 @@ def parse_args():
                         help="HTS GUI 데모 모드 (키움 연결 없이 화면만)")
     parser.add_argument("--balance", action="store_true",
                         help="모든 계좌의 예수금/평가금액을 출력하고 종료 (진단용)")
+    parser.add_argument("--regpw", action="store_true",
+                        help="계좌비밀번호 등록창을 띄운다 (등록 후 잔고 조회 가능)")
     return parser.parse_args()
+
+
+def run_register_password():
+    """
+    계좌비밀번호 등록창(ShowAccountWindow)을 띄운다.
+    트레이 아이콘을 찾지 못할 때 코드로 직접 등록창을 연다.
+    창에서 비밀번호 입력 → 'AUTO'(또는 전체계좌) 체크 → 등록 → 닫기.
+    """
+    app = QApplication(sys.argv)
+    kiwoom = KiwoomAPI()
+    kiwoom.login()
+    print("\n" + "=" * 60)
+    print("계좌비밀번호 등록창을 띄웁니다.")
+    print("  1) 비밀번호(2728) 입력")
+    print("  2) 'AUTO' 또는 '전체계좌' 체크")
+    print("  3) '등록' 클릭 후 창 닫기")
+    print("=" * 60)
+    kiwoom.dynamicCall("KOA_Functions(QString, QString)", "ShowAccountWindow", "")
+    # 등록창은 모달이 아니므로 이벤트 루프를 잠시 돌려 사용자가 입력하도록 대기
+    print("\n등록을 마치고 창을 닫은 뒤, 이 창에서 Enter 를 누르세요...")
+    app.processEvents()
+    input()
+    print("등록 완료. 이제 'py main.py --balance' 로 확인하세요.")
 
 
 def run_balance_check():
@@ -139,6 +164,11 @@ def run_analyze(code):
 
 def main():
     args = parse_args()
+
+    # 계좌비밀번호 등록창 모드
+    if args.regpw:
+        run_register_password()
+        return
 
     # 계좌 잔고 진단 모드 (출력 후 종료)
     if args.balance:
