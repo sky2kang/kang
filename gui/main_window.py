@@ -2951,8 +2951,16 @@ class MainWindow(QMainWindow):
 
 # ── 단독 실행 ─────────────────────────────────────────────────────────────────
 def run_standalone():
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    _sigint_timer = QTimer()
+    _sigint_timer.start(200)
+    _sigint_timer.timeout.connect(lambda: None)
+
     win = MainWindow()
     win.show()
 
@@ -2997,8 +3005,19 @@ def run_with_kiwoom():
     """
     from config.settings import IS_SIMUL, ACCOUNT_NUMBER
 
+    # Ctrl+C(SIGINT)로 종료 가능하게 — Qt 이벤트 루프가 파이썬 시그널을
+    # 가로채는 것을 막아 PowerShell/터미널에서 Ctrl+C 로 즉시 종료되도록 한다.
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # Qt 이벤트 루프가 도는 동안 주기적으로 파이썬 인터프리터에 제어를 넘겨
+    # SIGINT 가 실제로 처리되도록 빈 타이머를 돌린다.
+    _sigint_timer = QTimer()
+    _sigint_timer.start(200)
+    _sigint_timer.timeout.connect(lambda: None)
 
     # ── 스플래시 창 ──────────────────────────────────────────────────────
     splash = QWidget(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
