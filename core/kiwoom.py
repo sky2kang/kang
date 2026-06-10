@@ -85,6 +85,47 @@ class KiwoomAPI(QAxWidget):
         return self.dynamicCall("GetLoginInfo(QString)", tag)
 
     # -------------------------------------------------------------------------
+    # 종목 마스터 (종목코드 ↔ 종목명)
+    # -------------------------------------------------------------------------
+    def get_master_code_name(self, code):
+        """종목코드 → 종목명"""
+        name = self.dynamicCall("GetMasterCodeName(QString)", code)
+        return name.strip() if name else ""
+
+    def get_code_list_by_market(self, market="0"):
+        """
+        시장별 종목코드 목록.
+        market: "0"=코스피, "10"=코스닥, "3"=ELW, "8"=ETF 등
+        """
+        raw = self.dynamicCall("GetCodeListByMarket(QString)", market)
+        return [c for c in raw.strip(";").split(";") if c]
+
+    def build_name_code_map(self, markets=("0", "10")):
+        """
+        종목명→코드, 코드→종목명 매핑을 구축해 캐시한다.
+        키움은 종목명으로 직접 코드를 찾는 API가 없으므로
+        전체 코드를 순회하며 이름을 매핑한다. (최초 1회만 실행)
+        반환: (name_to_code dict, code_to_name dict)
+        """
+        if getattr(self, "_name_to_code", None):
+            return self._name_to_code, self._code_to_name
+
+        name_to_code = {}
+        code_to_name = {}
+        for market in markets:
+            for code in self.get_code_list_by_market(market):
+                name = self.get_master_code_name(code)
+                if not name:
+                    continue
+                code_to_name[code] = name
+                # 동일 종목명이 여러 시장에 있을 수 있으나 첫 항목 우선
+                name_to_code.setdefault(name, code)
+        self._name_to_code = name_to_code
+        self._code_to_name = code_to_name
+        logger.info(f"종목 마스터 구축: {len(code_to_name)}개 종목")
+        return name_to_code, code_to_name
+
+    # -------------------------------------------------------------------------
     # TR 조회 (요청/응답)
     # -------------------------------------------------------------------------
     def set_input_value(self, key, value):

@@ -563,17 +563,28 @@ class _ConditionTab(QWidget):
         right_splitter = QSplitter(Qt.Vertical)
 
         # 우측 상단: 편입 종목 미리보기
-        preview_box = QGroupBox("실시간 편입 종목")
+        preview_box = QGroupBox("조건식 편입 종목")
         pv = QVBoxLayout(preview_box)
+
+        name_row = QHBoxLayout()
         self.lbl_cond_name = QLabel("조건식을 선택하세요")
         self.lbl_cond_name.setStyleSheet("font-weight:bold; font-size:13px;")
-        pv.addWidget(self.lbl_cond_name)
+        name_row.addWidget(self.lbl_cond_name)
+        name_row.addStretch()
+        # 조건식 내용(현재 부합 종목) 조회 버튼
+        self.btn_preview_cond = QPushButton("🔍 조건식 종목 조회")
+        self.btn_preview_cond.setToolTip(
+            "선택한 조건식에 현재 부합하는 종목을 1회 조회합니다.\n"
+            "(키움 API는 조건식 수식 자체는 제공하지 않습니다)"
+        )
+        name_row.addWidget(self.btn_preview_cond)
+        pv.addLayout(name_row)
 
         self.tbl_stocks = _make_table(
             ["종목코드", "종목명", "편입시간", "현재가", "상태"],
             stretch_col=1
         )
-        self.tbl_stocks.setMaximumHeight(200)
+        self.tbl_stocks.setMinimumHeight(160)
         pv.addWidget(self.tbl_stocks)
         right_splitter.addWidget(preview_box)
 
@@ -732,6 +743,32 @@ class _ConditionTab(QWidget):
                 result.append(item.text().split(" [")[0])
         return result
 
+    def current_cond_name(self):
+        """현재 선택된 조건식 이름 (없으면 None)"""
+        row = self.cond_list.currentRow()
+        if row < 0:
+            return None
+        item = self.cond_list.item(row)
+        return item.text().split(" [")[0] if item else None
+
+    def show_preview_stocks(self, cond_name, stocks):
+        """조건식 1회 조회 결과를 테이블에 표시. stocks=[{code,name,price}, ...]"""
+        self.lbl_cond_name.setText(f"📋 {cond_name}  (현재 부합 {len(stocks)}종목)")
+        tbl = self.tbl_stocks
+        tbl.setRowCount(0)
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        for s in stocks:
+            r = tbl.rowCount(); tbl.insertRow(r)
+            for c, val in enumerate([
+                s.get("code", ""), s.get("name", ""),
+                now, s.get("price", ""), "부합",
+            ]):
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 4:
+                    item.setForeground(QColor(C_PROFIT))
+                tbl.setItem(r, c, item)
+
     def add_stock_entry(self, cond_name: str, code: str, name: str,
                         price: str = "", status: str = "편입"):
         """실시간 편입 종목 추가 (조건검색 이벤트에서 호출)"""
@@ -791,10 +828,10 @@ class _IndividualTab(QWidget):
 
         # 종목 추가
         add_row = QHBoxLayout()
-        add_row.addWidget(QLabel("종목코드:"))
+        add_row.addWidget(QLabel("종목코드/종목명:"))
         self.edit_code = QLineEdit()
-        self.edit_code.setPlaceholderText("예: 005930")
-        self.edit_code.setMaximumWidth(100)
+        self.edit_code.setPlaceholderText("예: 005930 또는 삼성전자")
+        self.edit_code.setMaximumWidth(160)
         add_row.addWidget(self.edit_code)
         self.btn_add = QPushButton("종목 추가")
         self.btn_add.setObjectName("btnBuy")
@@ -1067,14 +1104,14 @@ class _BacktestTab(QWidget):
         mode_h.addStretch()
         lg.addWidget(mode_w, 0, 1, 1, 3)
 
-        # 단일종목 코드
-        self.lbl_code = QLabel("종목코드:")
+        # 단일종목 코드/종목명
+        self.lbl_code = QLabel("종목코드/명:")
         lg.addWidget(self.lbl_code, 1, 0)
         self.edit_bt_code = QLineEdit("005930")
-        self.edit_bt_code.setMaximumWidth(100)
-        self.edit_bt_code.setPlaceholderText("예) 005930")
+        self.edit_bt_code.setMaximumWidth(140)
+        self.edit_bt_code.setPlaceholderText("005930 또는 삼성전자")
         lg.addWidget(self.edit_bt_code, 1, 1)
-        self.lbl_code_hint = QLabel("삼성전자=005930  카카오=035720")
+        self.lbl_code_hint = QLabel("코드(6자리) 또는 종목명 입력")
         self.lbl_code_hint.setStyleSheet("color:#8b949e; font-size:9px;")
         lg.addWidget(self.lbl_code_hint, 1, 2, 1, 2)
 
@@ -1589,10 +1626,10 @@ class _AnalysisTab(QWidget):
 
         # 조회
         row = QHBoxLayout()
-        row.addWidget(QLabel("종목코드:"))
+        row.addWidget(QLabel("종목코드/명:"))
         self.edit_code = QLineEdit()
-        self.edit_code.setPlaceholderText("005930")
-        self.edit_code.setMaximumWidth(100)
+        self.edit_code.setPlaceholderText("005930 또는 삼성전자")
+        self.edit_code.setMaximumWidth(160)
         row.addWidget(self.edit_code)
         row.addWidget(QLabel("기간(일):"))
         self.spin_days = QSpinBox()
@@ -2039,6 +2076,7 @@ class MainWindow(QMainWindow):
         self.tab_dashboard.btn_refresh.clicked.connect(lambda _=False: self._refresh_balance(force=True))
         self.tab_stoploss.btn_liquidate.clicked.connect(self._emergency_liquidate)
         self.tab_condition.btn_load_cond.clicked.connect(self._load_conditions)
+        self.tab_condition.btn_preview_cond.clicked.connect(self._preview_condition_stocks)
         self.tab_backtest.btn_save_chart.clicked.connect(self._save_bt_chart)
         self.tab_backtest.run_requested.connect(self._run_backtest)
         self.tab_screening.btn_screen.clicked.connect(self._run_screening)
@@ -2187,6 +2225,72 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("조건식 로드 실패: %s", e)
 
+    def _preview_condition_stocks(self):
+        """선택한 조건식에 현재 부합하는 종목을 1회 조회해 미리보기 테이블에 표시."""
+        cond_name = self.tab_condition.current_cond_name()
+        if not cond_name:
+            QMessageBox.warning(self, "안내", "먼저 좌측에서 조건식을 선택하세요.")
+            return
+        if self._mdata is None:
+            # 데모 데이터
+            demo = [
+                {"code": "005930", "name": "삼성전자", "price": "71,000"},
+                {"code": "035720", "name": "카카오", "price": "48,500"},
+                {"code": "000660", "name": "SK하이닉스", "price": "178,000"},
+            ]
+            self.tab_condition.show_preview_stocks(cond_name, demo)
+            self._log(f"[데모] 조건식 '{cond_name}' 부합 {len(demo)}종목", 2)
+            return
+
+        kiwoom = getattr(self._mdata, "api", None)
+        if kiwoom is None:
+            QMessageBox.warning(self, "안내", "Kiwoom 연결이 필요합니다.")
+            return
+
+        self.tab_condition.btn_preview_cond.setEnabled(False)
+        self.tab_condition.btn_preview_cond.setText("조회 중...")
+        QApplication.processEvents()
+        try:
+            # 조건식 목록이 비어있으면 먼저 로드
+            if not getattr(kiwoom, "condition_list", None):
+                kiwoom.load_condition_list()
+            cond_index = kiwoom.get_condition_index_by_name(cond_name)
+            if cond_index is None:
+                QMessageBox.warning(
+                    self, "안내",
+                    f"조건식 '{cond_name}' 의 인덱스를 찾을 수 없습니다."
+                )
+                return
+            # 단발성(search_type=0) 조회 → 현재 부합 종목코드 리스트
+            codes = kiwoom.send_condition("9001", cond_name, cond_index, search_type=0)
+            self._log(f"조건식 '{cond_name}' 부합 종목 {len(codes)}개 조회", 2)
+
+            stocks = []
+            for code in codes[:100]:   # 과도한 TR 방지 상위 100개
+                name = ""
+                price = ""
+                try:
+                    name = kiwoom.get_master_code_name(code)
+                except Exception:
+                    pass
+                try:
+                    info = self._mdata.get_stock_info(code)
+                    price = f"{info['price']:,}"
+                except Exception:
+                    pass
+                stocks.append({"code": code, "name": name or code, "price": price})
+
+            self.tab_condition.show_preview_stocks(cond_name, stocks)
+            if not stocks:
+                self._log(f"조건식 '{cond_name}' 에 현재 부합하는 종목이 없습니다.", 2)
+        except Exception as e:
+            logger.error("조건식 종목 조회 오류: %s", e)
+            self._log(f"조건식 조회 오류: {e}", 0)
+            QMessageBox.critical(self, "오류", str(e))
+        finally:
+            self.tab_condition.btn_preview_cond.setEnabled(True)
+            self.tab_condition.btn_preview_cond.setText("🔍 조건식 종목 조회")
+
     # ── 백테스트 ─────────────────────────────────────────────────────────────
     def _run_backtest(self, payload: dict):
         """
@@ -2210,11 +2314,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 백테스트 가능합니다.")
             return
         if mode == "single" and not code:
-            QMessageBox.warning(self, "안내", "종목코드를 입력하세요.")
+            QMessageBox.warning(self, "안내", "종목코드 또는 종목명을 입력하세요.")
             return
         if mode == "condition" and not cond_name:
             QMessageBox.warning(self, "안내", "조건식을 선택하세요.")
             return
+
+        # 종목명 입력 지원: 코드가 아니면 종목명→코드 변환
+        if mode == "single":
+            resolved, rname = self._mdata.resolve_code(code)
+            if not resolved:
+                QMessageBox.warning(
+                    self, "안내",
+                    f"'{code}' 에 해당하는 종목을 찾을 수 없습니다.\n"
+                    "정확한 종목코드(6자리) 또는 종목명을 입력하세요."
+                )
+                return
+            if resolved != code:
+                self._log(f"종목명 '{code}' → 코드 {resolved}({rname})", 2)
+                self.tab_backtest.edit_bt_code.setText(resolved)
+            code = resolved
 
         self.tab_backtest.btn_run_bt.setEnabled(False)
         self.tab_backtest.btn_run_bt.setText("실행 중...")
@@ -2309,16 +2428,15 @@ class MainWindow(QMainWindow):
             self.tab_backtest.btn_run_bt.setText("▶   백테스트 실행")
 
     def _get_condition_codes(self, cond_name: str) -> list:
-        """조건식 탭의 실시간 편입 종목 테이블에서 종목코드 수집"""
+        """조건식 탭의 편입/부합 종목 테이블에서 종목코드 수집"""
         codes = []
         tbl = self.tab_condition.tbl_stocks
         for row in range(tbl.rowCount()):
-            # 컬럼 0: 종목코드, 컬럼 4: 상태 ("편입" 만 포함)
-            cond_item = None
-            # cond_name 기반 필터는 어렵고, 현재 조건탭의 선택 조건식과 일치하는 항목을 수집
+            # 컬럼 0: 종목코드, 컬럼 4: 상태 ("편입" 또는 "부합")
             code_item = tbl.item(row, 0)
             status_item = tbl.item(row, 4)
-            if code_item and status_item and status_item.text() == "편입":
+            status = status_item.text() if status_item else ""
+            if code_item and status in ("편입", "부합"):
                 codes.append(code_item.text().strip())
         # 중복 제거
         seen = set()
@@ -2405,16 +2523,25 @@ class MainWindow(QMainWindow):
         self._log("분석 실행 버튼 클릭됨", 0)
         code = self.tab_analysis.edit_code.text().strip()
         if not code:
-            # 입력이 없으면 placeholder(예시 종목) 사용
-            code = self.tab_analysis.edit_code.placeholderText().strip()
-            if code:
-                self.tab_analysis.edit_code.setText(code)
-        if not code:
-            QMessageBox.warning(self, "안내", "종목코드를 입력하세요.")
+            QMessageBox.warning(self, "안내", "종목코드 또는 종목명을 입력하세요.")
             return
         if self._mdata is None:
             QMessageBox.warning(self, "안내", "Kiwoom 연결 후 분석 가능합니다.")
             return
+        # 종목명 입력 지원: 코드가 아니면 종목명→코드 변환
+        resolved, rname = self._mdata.resolve_code(code)
+        if not resolved:
+            QMessageBox.warning(
+                self, "안내",
+                f"'{code}' 에 해당하는 종목을 찾을 수 없습니다.\n"
+                "정확한 종목코드(6자리) 또는 종목명을 입력하세요."
+            )
+            return
+        if resolved != code:
+            self._log(f"종목명 '{code}' → 코드 {resolved}({rname})", 2)
+            self.tab_analysis.edit_code.setText(resolved)
+        code = resolved
+        name = rname or code
         days = self.tab_analysis.spin_days.value()
         self.tab_analysis.btn_analyze.setEnabled(False)
         self.tab_analysis.btn_analyze.setText("분석 중...")
@@ -2425,15 +2552,6 @@ class MainWindow(QMainWindow):
             start = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y%m%d")
             # 키움 OCX는 메인 스레드에서만 TR 응답을 받으므로 동기 실행
             df = self._mdata.get_daily_ohlcv(code, start)
-            name = code
-            try:
-                kiwoom = getattr(self._mdata, "api", None)
-                if kiwoom:
-                    n = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
-                    if n:
-                        name = n
-            except Exception:
-                pass
             analysis = StockAnalyzer(df).analyze()
             self.tab_analysis.show_analysis(analysis, code, name)
             self._log(f"분석 완료: {name}({code})", 0)
@@ -2705,28 +2823,31 @@ class MainWindow(QMainWindow):
 
     # ── 종목별 매매 탭 헬퍼 ─────────────────────────────────────────────────
     def _add_individual_stock(self):
-        code = self.tab_individual.edit_code.text().strip()
-        if not code:
-            # placeholder에서 가져오기
-            code = self.tab_individual.edit_code.placeholderText().replace("예: ", "").strip()
-        if not code:
+        text = self.tab_individual.edit_code.text().strip()
+        if not text:
             return
+        # 종목명/코드 → 코드 변환
+        name = text
+        code = text
+        if self._mdata:
+            try:
+                resolved, rname = self._mdata.resolve_code(text)
+                if not resolved:
+                    QMessageBox.warning(
+                        self, "안내",
+                        f"'{text}' 에 해당하는 종목을 찾을 수 없습니다.\n"
+                        "정확한 종목코드(6자리) 또는 종목명을 입력하세요."
+                    )
+                    return
+                code, name = resolved, rname
+            except Exception:
+                pass
         # 이미 추가된 코드면 건너뜀
         tbl = self.tab_individual.tbl
         for r in range(tbl.rowCount()):
             if tbl.item(r, 1) and tbl.item(r, 1).text() == code:
-                self._log(f"이미 추가된 종목: {code}", 0)
+                self._log(f"이미 추가된 종목: {name}({code})", 0)
                 return
-        name = code
-        if self._mdata:
-            try:
-                kiwoom = getattr(self._mdata, "api", None)
-                if kiwoom:
-                    fetched = kiwoom.dynamicCall("GetMasterCodeName(QString)", code).strip()
-                    if fetched:
-                        name = fetched
-            except Exception:
-                pass
         # 현재가 조회
         price_str = "--"
         if self._mdata:

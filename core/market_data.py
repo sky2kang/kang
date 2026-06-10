@@ -25,6 +25,66 @@ class MarketDataAPI:
         self.api = kiwoom
 
     # -------------------------------------------------------------------------
+    # 종목코드 / 종목명 변환
+    # -------------------------------------------------------------------------
+    def resolve_code(self, text):
+        """
+        입력값이 종목코드면 그대로, 종목명이면 코드로 변환해 반환.
+        - 6자리 숫자 → 종목코드로 간주
+        - 그 외 → 종목명으로 보고 마스터 매핑에서 코드 검색
+        찾지 못하면 None 반환. (code, name) 튜플 반환.
+        """
+        text = (text or "").strip()
+        if not text:
+            return None, None
+
+        # 6자리 숫자면 코드로 간주
+        if text.isdigit() and len(text) == 6:
+            name = self.api.get_master_code_name(text)
+            return text, (name or text)
+
+        # 종목명 → 코드 (마스터 매핑 사용)
+        try:
+            name_to_code, _ = self.api.build_name_code_map()
+        except Exception as e:
+            logger.warning("종목 마스터 구축 실패: %s", e)
+            return None, None
+
+        # 정확히 일치
+        if text in name_to_code:
+            code = name_to_code[text]
+            return code, text
+
+        # 부분 일치 (대소문자/공백 무시) — 첫 후보
+        norm = text.replace(" ", "").lower()
+        for name, code in name_to_code.items():
+            if name.replace(" ", "").lower() == norm:
+                return code, name
+        for name, code in name_to_code.items():
+            if norm in name.replace(" ", "").lower():
+                return code, name
+
+        return None, None
+
+    def search_stocks(self, keyword, limit=20):
+        """종목명 부분일치 검색 → [(code, name), ...]"""
+        keyword = (keyword or "").strip()
+        if not keyword:
+            return []
+        try:
+            name_to_code, _ = self.api.build_name_code_map()
+        except Exception:
+            return []
+        norm = keyword.replace(" ", "").lower()
+        results = []
+        for name, code in name_to_code.items():
+            if norm in name.replace(" ", "").lower() or keyword in code:
+                results.append((code, name))
+                if len(results) >= limit:
+                    break
+        return results
+
+    # -------------------------------------------------------------------------
     # 현재가 조회 (opt10001 - 주식기본정보)
     # -------------------------------------------------------------------------
     def get_stock_info(self, code):
