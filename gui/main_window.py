@@ -3001,7 +3001,7 @@ def run_with_kiwoom():
     app.setStyle("Fusion")
 
     # ── 스플래시 창 ──────────────────────────────────────────────────────
-    splash = QWidget(None, Qt.SplashScreen | Qt.FramelessWindowHint)
+    splash = QWidget(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
     splash.setFixedSize(400, 120)
     splash.setStyleSheet(f"background:{C_PANEL}; border:2px solid {C_ACCENT}; border-radius:8px;")
     sv = QVBoxLayout(splash)
@@ -3042,7 +3042,15 @@ def run_with_kiwoom():
         status_lbl.setText("로그인 중... (키움 로그인 창 확인)")
         app.processEvents()
 
+        # 스플래시(항상 위 표시)가 키움 로그인 창을 가리지 않도록 잠시 숨김
+        splash.hide()
+        app.processEvents()
+
         kiwoom.login()   # 키움 로그인 팝업 → 완료까지 블로킹
+
+        # 로그인 완료 후 스플래시 다시 표시
+        splash.show()
+        app.processEvents()
 
         status_lbl.setText("계좌 정보 조회 중...")
         app.processEvents()
