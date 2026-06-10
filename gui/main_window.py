@@ -106,37 +106,105 @@ QTextEdit, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTimeEdit {{
 QComboBox::drop-down {{ border:none; width:20px; }}
 QComboBox QAbstractItemView {{ background:{C_PANEL2}; color:{C_TEXT}; border:1px solid {C_BORDER}; }}
 
+/* ── 기본 버튼: 3단계 시각 피드백 (normal → hover → pressed) ── */
 QPushButton {{
     background:{C_PANEL2}; color:{C_TEXT}; border:1px solid {C_BORDER};
     border-radius:4px; padding:5px 12px; font-size:11px;
 }}
-QPushButton:hover {{ background:{C_HEADER}; border-color:{C_ACCENT}; }}
-QPushButton:pressed {{ background:{C_BG}; }}
-QPushButton:disabled {{ color:{C_TEXT_DIM}; background:{C_PANEL}; }}
+QPushButton:hover {{
+    background:{C_HEADER}; border-color:{C_ACCENT}; color:{C_TEXT};
+}}
+QPushButton:pressed {{
+    background:{C_BG}; border-color:{C_ACCENT};
+    padding-top:6px; padding-bottom:4px;   /* 살짝 눌리는 효과 */
+}}
+QPushButton:disabled {{
+    color:{C_TEXT_DIM}; background:{C_PANEL}; border-color:{C_BORDER};
+    opacity: 0.5;
+}}
 
+/* ── 매수 버튼 ── */
 QPushButton#btnBuy {{
     background:{C_BUY}; color:white; border:none; font-weight:bold;
+    border-bottom:3px solid #b03028;
 }}
-QPushButton#btnBuy:hover {{ background:#ff6b6b; }}
+QPushButton#btnBuy:hover {{
+    background:#ff6b6b; border-bottom:3px solid #d04040;
+}}
+QPushButton#btnBuy:pressed {{
+    background:#c03028; border-bottom:1px solid #901818;
+    padding-top:7px; padding-bottom:3px;
+}}
+QPushButton#btnBuy:disabled {{
+    background:#5a2020; color:#888; border:none;
+}}
+
+/* ── 매도 버튼 ── */
 QPushButton#btnSell {{
     background:{C_SELL}; color:white; border:none; font-weight:bold;
+    border-bottom:3px solid #1a5aaa;
 }}
-QPushButton#btnSell:hover {{ background:#5ba3ff; }}
+QPushButton#btnSell:hover {{
+    background:#5ba3ff; border-bottom:3px solid #2a70cc;
+}}
+QPushButton#btnSell:pressed {{
+    background:#1a5aaa; border-bottom:1px solid #0a3a88;
+    padding-top:7px; padding-bottom:3px;
+}}
+QPushButton#btnSell:disabled {{
+    background:#1a2a4a; color:#888; border:none;
+}}
+
+/* ── 자동매매 시작 버튼 ── */
 QPushButton#btnStart {{
-    background:#238636; color:white; border:none; font-size:13px; font-weight:bold;
+    background:#238636; color:white; border:none;
+    font-size:13px; font-weight:bold;
     padding:8px 24px; border-radius:5px;
+    border-bottom:3px solid #145222;
 }}
-QPushButton#btnStart:hover {{ background:#2ea043; }}
+QPushButton#btnStart:hover {{
+    background:#2ea043; border-bottom:3px solid #1a6b2e;
+}}
+QPushButton#btnStart:pressed {{
+    background:#145222; border-bottom:1px solid #0a3018;
+    padding-top:10px; padding-bottom:6px;
+}}
+QPushButton#btnStart:disabled {{
+    background:#1a3a22; color:#5a8a5a; border:none;
+    font-size:13px; font-weight:bold; padding:8px 24px; border-radius:5px;
+}}
+
+/* ── 정지 버튼 ── */
 QPushButton#btnStop {{
-    background:#da3633; color:white; border:none; font-size:13px; font-weight:bold;
+    background:#da3633; color:white; border:none;
+    font-size:13px; font-weight:bold;
     padding:8px 24px; border-radius:5px;
+    border-bottom:3px solid #8b1a1a;
 }}
-QPushButton#btnStop:hover {{ background:#f85149; }}
+QPushButton#btnStop:hover {{
+    background:#f85149; border-bottom:3px solid #b02020;
+}}
+QPushButton#btnStop:pressed {{
+    background:#8b1a1a; border-bottom:1px solid #5a0808;
+    padding-top:10px; padding-bottom:6px;
+}}
+QPushButton#btnStop:disabled {{
+    background:#3a1a1a; color:#7a4040; border:none;
+    font-size:13px; font-weight:bold; padding:8px 24px; border-radius:5px;
+}}
+
+/* ── 긴급청산 버튼 ── */
 QPushButton#btnEmergency {{
-    background:#6e1a1a; color:#f85149; border:2px solid {C_BUY}; font-weight:bold;
-    font-size:13px; padding:8px 24px; border-radius:5px;
+    background:#6e1a1a; color:#f85149; border:2px solid {C_BUY};
+    font-weight:bold; font-size:13px; padding:8px 24px; border-radius:5px;
 }}
-QPushButton#btnEmergency:hover {{ background:#8b2020; }}
+QPushButton#btnEmergency:hover {{
+    background:#8b2020; color:white;
+}}
+QPushButton#btnEmergency:pressed {{
+    background:#3a0808; border-color:#ff0000;
+    padding-top:10px; padding-bottom:6px;
+}}
 
 QCheckBox {{ color:{C_TEXT}; spacing:6px; }}
 QCheckBox::indicator {{
@@ -171,6 +239,9 @@ QScrollBar::handle:vertical {{
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}
 
 QSplitter::handle {{ background:{C_BORDER}; }}
+QSplitter::handle:hover {{ background:{C_ACCENT}; }}
+QSplitter::handle:horizontal {{ width:4px; }}
+QSplitter::handle:vertical   {{ height:4px; }}
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{ color:{C_BORDER}; }}
 
 QProgressBar {{
@@ -1153,7 +1224,7 @@ class _BacktestTab(QWidget):
         self._main_splitter.addWidget(self._chart_placeholder)
 
         result_tabs = QTabWidget()
-        result_tabs.setMaximumHeight(210)
+        result_tabs.setMinimumHeight(150)
 
         self.txt_bt_result = QTextEdit()
         self.txt_bt_result.setReadOnly(True)
@@ -1663,8 +1734,7 @@ class _Sidebar(QWidget):
 class _LogPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(150)
-        self.setMaximumHeight(220)
+        self.setMinimumHeight(120)
         self._build()
 
     def _build(self):
@@ -1800,6 +1870,12 @@ class _HeaderBar(QWidget):
     def set_trading(self, running: bool):
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
+        if running:
+            self.btn_start.setText("▶  실행 중...")
+            self.btn_stop.setText("■  정지")
+        else:
+            self.btn_start.setText("▶  자동매매 시작")
+            self.btn_stop.setText("■  정지 (비활성)")
 
 
 # ── 메인 윈도우 ──────────────────────────────────────────────────────────────
@@ -1825,6 +1901,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("AutoTrader — HTS 자동매매")
         self.resize(1400, 900)
+        self.setMinimumSize(900, 600)   # 이 이하로는 줄어들지 않음
         self.setStyleSheet(DARK_QSS)
 
         self._build_menu()
