@@ -31,8 +31,24 @@ class ConditionTrader:
         # 활성 조건식 {cond_name: {"index": idx, "screen": screen_no}}
         self.active_conditions = {}
 
+        # 매매 결과를 GUI 등 외부로 통보하는 콜백
+        # signature: callback(cond_name, code, name, action, ok)
+        #   action: "매수" | "매도",  ok: True(성공)/False(실패·생략)
+        self.trade_callback = None
+
         # 실시간 조건 편입/이탈 콜백 등록
         self.api.register_real_condition_callback(self._on_condition_event)
+
+    def set_trade_callback(self, callback):
+        """매수/매도 발생 시 호출될 콜백 등록 (GUI 표시용)"""
+        self.trade_callback = callback
+
+    def _notify_trade(self, cond_name, code, name, action, ok):
+        if self.trade_callback:
+            try:
+                self.trade_callback(cond_name, code, name, action, ok)
+            except Exception as e:
+                logger.warning("trade_callback 오류: %s", e)
 
     # -------------------------------------------------------------------------
     # 조건검색 시작
@@ -125,14 +141,17 @@ class ConditionTrader:
         name = self._get_stock_name(code)
         logger.info(f"[조건편입:{cond_name}] {name}({code}) 매수시도 "
                     f"현재가={info['price']:,}")
-        self.trader.buy(code, name, info["price"])
+        ok = self.trader.buy(code, name, info["price"])
+        self._notify_trade(cond_name, code, name, "매수", bool(ok))
 
     def _handle_exit(self, code, cond_name):
         """조건 이탈 → 매도 (보유 중인 경우만)"""
         if code not in self.trader.positions:
             return
+        name = self.trader.positions[code].get("name", code)
         logger.info(f"[조건이탈:{cond_name}] {code} 매도시도")
-        self.trader.sell(code, reason=f"조건이탈({cond_name})")
+        ok = self.trader.sell(code, reason=f"조건이탈({cond_name})")
+        self._notify_trade(cond_name, code, name, "매도", bool(ok))
 
     def _get_stock_name(self, code):
         """종목코드로 종목명 조회"""

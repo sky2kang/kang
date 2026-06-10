@@ -66,6 +66,13 @@ class TradingController:
         self._account = ACCOUNT_NUMBER
         self._is_simul = IS_SIMUL
         self._pre_injected = False   # 이미 로그인된 kiwoom 주입 여부
+        self._trade_callback = None  # 조건식 매매 발생 통보 콜백 (GUI 표시용)
+
+    def set_trade_callback(self, callback):
+        """조건식 매수/매도 발생 시 호출될 콜백 등록"""
+        self._trade_callback = callback
+        if self._condition_trader:
+            self._condition_trader.set_trade_callback(callback)
 
     # ------------------------------------------------------------------
     def inject_kiwoom(self, kiwoom, market_data, account: str, is_simul: bool):
@@ -132,6 +139,8 @@ class TradingController:
                 self._condition_trader = ConditionTrader(
                     self._kiwoom, self._trader, self._market_data
                 )
+                if self._trade_callback:
+                    self._condition_trader.set_trade_callback(self._trade_callback)
                 self._condition_trader.start(condition_name)
             else:
                 self._condition_trader = None

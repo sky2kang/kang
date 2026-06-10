@@ -719,9 +719,39 @@ class _ConditionTab(QWidget):
             ]):
                 item = QTableWidgetItem(str(val))
                 item.setTextAlignment(Qt.AlignCenter)
-                if c == 4 and val == "편입":
-                    item.setForeground(QColor(C_PROFIT))
+                if c == 4:
+                    item.setForeground(QColor(self._status_color(val)))
                 tbl.setItem(r, c, item)
+
+    @staticmethod
+    def _status_color(status):
+        if status in ("매수완료", "편입", "부합"):
+            return C_BUY
+        if status in ("매도완료", "이탈"):
+            return C_SELL
+        if status in ("매수실패", "매도실패"):
+            return C_YELLOW
+        return C_TEXT_DIM
+
+    def mark_trade(self, cond_name, code, name, action, ok):
+        """실제 매수/매도 발생 결과를 테이블 상태에 반영. (조건식 매매 콜백용)"""
+        status = f"{action}완료" if ok else f"{action}실패"
+        stocks = self._cond_stocks.setdefault(cond_name, [])
+        found = False
+        for s in stocks:
+            if s["code"] == code:
+                s["status"] = status
+                found = True
+                break
+        if not found:
+            stocks.insert(0, {
+                "code": code, "name": name,
+                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                "price": "", "status": status,
+            })
+        cur = self.cond_list.currentRow()
+        if cur >= 0 and self.cond_list.item(cur).text().split(" [")[0] == cond_name:
+            self._refresh_stock_table(cond_name)
 
     # ── 외부 API ─────────────────────────────────────────────────────────────
     def set_conditions(self, cond_list: list):
@@ -2057,6 +2087,9 @@ class MainWindow(QMainWindow):
         v_splitter.setStretchFactor(0, 1)
         v_splitter.setStretchFactor(1, 0)
         v_splitter.setSizes([700, 160])
+        # 창 크기를 줄여도 로그 패널이 사라지지 않도록 접힘 방지
+        v_splitter.setChildrenCollapsible(False)
+        self._v_splitter = v_splitter
 
         main_vbox.addWidget(v_splitter)
 
@@ -3144,6 +3177,13 @@ def run_with_kiwoom():
         app.processEvents()
 
         win = MainWindow(controller=ctrl, market_data_api=mdata)
+
+        # 조건식 매수/매도 발생 시 조건식 매매 탭 테이블에 결과 반영
+        def _on_cond_trade(cond_name, code, name, action, ok):
+            win.tab_condition.mark_trade(cond_name, code, name, action, ok)
+            mark = "성공" if ok else "실패"
+            win._log(f"[{action}{mark}] {name}({code}) ← 조건 '{cond_name}'", 1)
+        ctrl.set_trade_callback(_on_cond_trade)
 
         # 계좌 목록 헤더에 표시
         win.header.combo_account.clear()
