@@ -838,6 +838,8 @@ class _IndividualTab(QWidget):
         add_row.addWidget(self.btn_add)
         self.btn_del = QPushButton("선택 삭제")
         add_row.addWidget(self.btn_del)
+        self.btn_refresh_price = QPushButton("🔄 현재가 새로고침")
+        add_row.addWidget(self.btn_refresh_price)
         add_row.addStretch()
         self.btn_import = QPushButton("CSV 불러오기")
         add_row.addWidget(self.btn_import)
@@ -2086,6 +2088,7 @@ class MainWindow(QMainWindow):
         self.tab_scheduler.btn_save_sched.clicked.connect(self._save_settings)
         self.tab_individual.btn_add.clicked.connect(self._add_individual_stock)
         self.tab_individual.btn_del.clicked.connect(self._del_individual_stock)
+        self.tab_individual.btn_refresh_price.clicked.connect(self._refresh_individual_prices)
         self.tab_individual.btn_import.clicked.connect(self._import_individual_csv)
         self.tab_individual.btn_apply_detail.clicked.connect(self._apply_individual_detail)
         # 탭 전환 시 당일 거래내역 갱신
@@ -2680,6 +2683,9 @@ class MainWindow(QMainWindow):
                     item = QTableWidgetItem(val)
                     item.setTextAlignment(Qt.AlignCenter)
                     tbl.setItem(r, c, item)
+            # 복원 직후 현재가 자동 조회 (Kiwoom 연결된 경우, 약간 지연)
+            if self._mdata is not None and tbl.rowCount() > 0:
+                QTimer.singleShot(3000, self._refresh_individual_prices)
         except Exception as e:
             logger.debug("종목별 매매 목록 복원 실패: %s", e)
 
@@ -2921,6 +2927,45 @@ class MainWindow(QMainWindow):
         )
         for r in rows:
             self.tab_individual.tbl.removeRow(r)
+
+    def _refresh_individual_prices(self):
+        """종목별 매매 탭 전체 종목의 현재가를 다시 조회해 갱신한다."""
+        if self._mdata is None:
+            QMessageBox.warning(self, "안내", "Kiwoom 연결 후 조회 가능합니다.")
+            return
+        tbl = self.tab_individual.tbl
+        if tbl.rowCount() == 0:
+            return
+        self.tab_individual.btn_refresh_price.setEnabled(False)
+        self.tab_individual.btn_refresh_price.setText("조회 중...")
+        QApplication.processEvents()
+        ok = 0
+        try:
+            for r in range(tbl.rowCount()):
+                code_item = tbl.item(r, 1)
+                if not code_item:
+                    continue
+                code = code_item.text().strip()
+                try:
+                    info = self._mdata.get_stock_info(code)
+                    price = info.get("price", 0)
+                    if price:
+                        if tbl.item(r, 3):
+                            tbl.item(r, 3).setText(f"{price:,}")
+                        else:
+                            it = QTableWidgetItem(f"{price:,}")
+                            it.setTextAlignment(Qt.AlignCenter)
+                            tbl.setItem(r, 3, it)
+                        ok += 1
+                    else:
+                        self._log(f"[{code}] 현재가 0 반환", 0)
+                except Exception as e:
+                    self._log(f"[{code}] 현재가 조회 실패: {e}", 0)
+                QApplication.processEvents()
+            self._log(f"현재가 새로고침 완료: {ok}/{tbl.rowCount()}종목", 0)
+        finally:
+            self.tab_individual.btn_refresh_price.setEnabled(True)
+            self.tab_individual.btn_refresh_price.setText("🔄 현재가 새로고침")
 
     def _import_individual_csv(self):
         path, _ = QFileDialog.getOpenFileName(self, "CSV 불러오기", "", "CSV (*.csv)")
