@@ -24,7 +24,7 @@ class KiwoomAPI(QAxWidget):
         # 조건검색
         self.condition_list = {}       # {조건인덱스: 조건명}
         self.condition_tr_result = []  # 조건검색 단발성 결과 (종목코드 리스트)
-        self.real_condition_callback = None  # 실시간 조건 편입/이탈 콜백
+        self.real_condition_callbacks = []   # 실시간 조건 편입/이탈 콜백 목록
 
         self._init_api()
 
@@ -362,9 +362,22 @@ class KiwoomAPI(QAxWidget):
         """
         event_str = "편입" if event_type == "I" else "이탈"
         logger.info(f"[실시간조건] [{cond_name}] {code} {event_str}")
-        if self.real_condition_callback:
-            self.real_condition_callback(code, event_type, cond_name, cond_index)
+        for cb in list(self.real_condition_callbacks):
+            try:
+                cb(code, event_type, cond_name, cond_index)
+            except Exception as e:
+                logger.warning(f"실시간조건 콜백 오류: {e}")
 
     def register_real_condition_callback(self, callback):
-        """실시간 조건 편입/이탈 시 호출할 콜백 등록"""
-        self.real_condition_callback = callback
+        """
+        실시간 조건 편입/이탈 시 호출할 콜백 등록.
+        여러 개를 등록할 수 있으며(GUI 표시용 + 자동매매용), 등록 순서대로 호출된다.
+        중복 등록은 무시한다.
+        """
+        if callback not in self.real_condition_callbacks:
+            self.real_condition_callbacks.append(callback)
+
+    def unregister_real_condition_callback(self, callback):
+        """등록된 실시간 조건 콜백 해제 (없으면 무시)"""
+        if callback in self.real_condition_callbacks:
+            self.real_condition_callbacks.remove(callback)

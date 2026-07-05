@@ -99,6 +99,11 @@ class ConditionTrader:
         for name, info in self.active_conditions.items():
             self.api.send_condition_stop(info["screen"], name, info["index"])
         self.active_conditions = {}
+        # 재시작 시 중복 매수를 막기 위해 조건 콜백 해제
+        try:
+            self.api.unregister_real_condition_callback(self._on_condition_event)
+        except Exception as e:
+            logger.warning("조건 콜백 해제 실패: %s", e)
 
     # -------------------------------------------------------------------------
     # 실시간 편입/이탈 처리
